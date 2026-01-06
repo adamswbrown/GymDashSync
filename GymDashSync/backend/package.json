@@ -1,0 +1,23 @@
+{
+  "name": "gymdashsync-backend",
+  "version": "1.0.0",
+  "description": "Lightweight backend ingestion service for HealthKit data",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js",
+    "dev": "node server.js",
+    "create-pairing": "node scripts/create-pairing-code.js"
+  },
+  "keywords": [
+    "healthkit",
+    "ingestion",
+    "sqlite"
+  ],
+  "author": "",
+  "license": "MIT",
+  "dependencies": {
+    "express": "^4.18.2",
+    "better-sqlite3": "^9.1.1"
+  }
+}
+
