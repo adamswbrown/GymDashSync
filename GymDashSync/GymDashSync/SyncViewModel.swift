@@ -56,7 +56,9 @@ class SyncViewModel: ObservableObject {
         // Track sync results from backend store
         syncManager.backendStore.onSyncComplete = { [weak self] results in
             DispatchQueue.main.async {
+                print("[SyncViewModel] onSyncComplete callback fired with \(results.count) result(s)")
                 self?.lastSyncResults = results
+                print("[SyncViewModel] lastSyncResults updated, now has \(self?.lastSyncResults.count ?? 0) result(s)")
             }
         }
         
@@ -349,6 +351,15 @@ class SyncViewModel: ObservableObject {
         checkAuthorizationStatus()
         lastError = nil
         healthKitError = nil
+    }
+    
+    /// Resets all anchor states and triggers a full re-sync
+    func forceResync() {
+        syncManager.resetAllAnchors()
+        // Trigger sync after a brief delay to ensure anchors are cleared
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.2) {
+            self.syncNow()
+        }
     }
     
     func clearLastError() {

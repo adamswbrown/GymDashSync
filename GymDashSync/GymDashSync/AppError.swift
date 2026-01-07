@@ -113,7 +113,7 @@ public struct ErrorContext: Codable, @unchecked Sendable {
 }
 
 extension ErrorContext: Equatable {
-    public nonisolated static func == (lhs: ErrorContext, rhs: ErrorContext) -> Bool {
+    public static func == (lhs: ErrorContext, rhs: ErrorContext) -> Bool {
         return lhs.endpoint == rhs.endpoint &&
                lhs.statusCode == rhs.statusCode &&
                lhs.responseBody == rhs.responseBody &&

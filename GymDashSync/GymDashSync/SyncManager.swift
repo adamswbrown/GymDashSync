@@ -32,6 +32,10 @@ public class SyncManager: NSObject, HDSQueryObserverDelegate {
     private(set) public var isSyncing: Bool = false
     private var isTestReadInProgress: Bool = false // Guard against redundant test reads
     
+    // Track accumulating sync results during syncNow() operation
+    private var currentSyncResults: [SyncResult] = []
+    private var originalOnSyncComplete: (([SyncResult]) -> Void)?
+    
     public init(backendConfig: BackendConfig = .default) {
         self.hdsManager = HDSManagerFactory.manager()
         self.backendStore = BackendSyncStore(config: backendConfig)
@@ -40,14 +44,35 @@ public class SyncManager: NSObject, HDSQueryObserverDelegate {
         // Set ourselves as the observer delegate
         hdsManager.observerDelegate = self
         
-        // Track sync results for dev mode
-        backendStore.onSyncComplete = { results in
-            // Results are stored in backendStore.lastSyncResults
-            // Can be accessed by view models for diagnostics
-        }
+        // Don't set onSyncComplete here - let ViewModels set their own callbacks
+        // Results are stored in backendStore.lastSyncResults and can be accessed directly
         
         // Check authorization status
         checkAuthorizationStatus()
+        
+        // If already authorized, ensure observers are initialized
+        // This handles the case where app restarts but permissions were already granted
+        if isAuthorized {
+            initializeObserversIfAuthorized()
+        }
+    }
+    
+    /// Initializes observers if permissions are already granted
+    /// This is called on init if permissions are already granted (app restart scenario)
+    private func initializeObserversIfAuthorized() {
+        guard HKHealthStore.isHealthDataAvailable() else {
+            return
+        }
+        
+        print("[SyncManager] Permissions already granted - initializing observers...")
+        
+        // Add all observers (workouts + profile metrics)
+        // This ensures observers are available even if permissions were granted in a previous session
+        hdsManager.addObjectTypes([WorkoutData.self], externalStore: backendStore)
+        hdsManager.addObjectTypes([HeightData.self, WeightData.self, BodyFatData.self], externalStore: backendStore)
+        
+        let observerCount = hdsManager.allObservers.count
+        print("[SyncManager] Initialized \(observerCount) observer(s) for already-granted permissions")
     }
     
     // MARK: - Permission Management
@@ -434,6 +459,26 @@ public class SyncManager: NSObject, HDSQueryObserverDelegate {
                                    weightStatus == .sharingAuthorized ||
                                    bodyFatStatus == .sharingAuthorized
         
+        // If we have quick check authorization, initialize observers immediately
+        if quickCheckAuthorized {
+            let wasAuthorized = isAuthorized
+            isAuthorized = true
+            
+            // Initialize observers if not already initialized
+            if !wasAuthorized || hdsManager.allObservers.isEmpty {
+                initializeObserversIfAuthorized()
+            }
+            
+            // Notify observers of authorization status
+            NotificationCenter.default.post(name: NSNotification.Name("HealthKitAuthorizationStatusChanged"), object: nil)
+            if !wasAuthorized {
+                onSyncStatusChanged?(false, lastSyncDate, nil)
+            }
+            
+            print("[SyncManager] Authorization check: Quick check authorized - observers initialized")
+            return
+        }
+        
         // Check if any profile types show denied - we need to test read them even if workout is authorized
         let profileTypesDenied = heightStatus == .sharingDenied || 
                                  weightStatus == .sharingDenied || 
@@ -469,8 +514,13 @@ public class SyncManager: NSObject, HDSQueryObserverDelegate {
             }
             
             // If we're already authorized, don't re-check
+            // But ensure observers are initialized even if we skip the check
             if isAuthorized {
                 print("[SyncManager] Authorization check: Already authorized (from previous test read), skipping redundant check")
+                // Ensure observers are initialized even if authorization was cached
+                if hdsManager.allObservers.isEmpty {
+                    initializeObserversIfAuthorized()
+                }
                 return
             }
             
@@ -597,6 +647,11 @@ public class SyncManager: NSObject, HDSQueryObserverDelegate {
                 if wasAuthorized != self.isAuthorized {
                     print("[SyncManager] Authorization status changed: \(wasAuthorized) -> \(self.isAuthorized)")
                     self.onSyncStatusChanged?(false, self.lastSyncDate, nil)
+                    
+                    // If authorization just became true, ensure observers are initialized
+                    if self.isAuthorized {
+                        self.initializeObserversIfAuthorized()
+                    }
                 }
             }
             
@@ -860,9 +915,21 @@ public class SyncManager: NSObject, HDSQueryObserverDelegate {
         store.execute(bodyFatTestQuery)
         
         // Wait for all test reads to complete
-        dispatchGroup.notify(queue: .main) {
+        dispatchGroup.notify(queue: .main) { [weak self] in
+            guard let self = self else {
+                completion(false)
+                return
+            }
+            
             let isAuthorized = workoutAuthorized || heightAuthorized || weightAuthorized || bodyFatAuthorized
             print("[SyncManager] Test reads completed - workout=\(workoutAuthorized), height=\(heightAuthorized), weight=\(weightAuthorized), bodyFat=\(bodyFatAuthorized), isAuthorized=\(isAuthorized)")
+            
+            // If authorized and observers aren't initialized yet, initialize them
+            let wasAuthorized = self.isAuthorized
+            if isAuthorized && !wasAuthorized {
+                self.initializeObserversIfAuthorized()
+            }
+            
             completion(isAuthorized)
         }
     }
@@ -886,12 +953,27 @@ public class SyncManager: NSObject, HDSQueryObserverDelegate {
         isSyncing = true
         onSyncStatusChanged?(true, lastSyncDate, nil)
         
+        // Clear/reset accumulating results at start of sync
+        currentSyncResults = []
+        
+        // Save original callback and replace with accumulator during sync
+        originalOnSyncComplete = backendStore.onSyncComplete
+        backendStore.onSyncComplete = { [weak self] results in
+            guard let self = self else { return }
+            // Accumulate results from each observer's execution
+            self.currentSyncResults.append(contentsOf: results)
+            print("[SyncManager] Accumulated \(results.count) result(s), total: \(self.currentSyncResults.count)")
+        }
+        
         // Get all observers and execute queries on each to force manual sync
         // This ensures we query HealthKit for data even if there are no new changes
         let observers = hdsManager.allObservers
         
         guard !observers.isEmpty else {
             print("[SyncManager] WARNING: No observers configured. Make sure you've requested permissions and added object types.")
+            // Restore original callback
+            backendStore.onSyncComplete = originalOnSyncComplete
+            originalOnSyncComplete = nil
             isSyncing = false
             onSyncStatusChanged?(false, lastSyncDate, NSError(domain: "SyncManager", code: -2, userInfo: [NSLocalizedDescriptionKey: "No observers configured"]))
             completion(false, NSError(domain: "SyncManager", code: -2, userInfo: [NSLocalizedDescriptionKey: "No observers configured"]))
@@ -933,20 +1015,56 @@ public class SyncManager: NSObject, HDSQueryObserverDelegate {
             
             print("[SyncManager] All observer executions completed: \(completedObservers)/\(observers.count) finished")
             
-                    self.isSyncing = false
-                    self.lastSyncDate = Date()
+            // All observers have completed - combine all results and update once
+            // Restore original callback
+            let savedCallback = self.originalOnSyncComplete
+            self.backendStore.onSyncComplete = self.originalOnSyncComplete
+            self.originalOnSyncComplete = nil
+            
+            // If no results were accumulated, it means observers found no data
+            // Create a summary result to show that sync ran but found nothing
+            if self.currentSyncResults.isEmpty {
+                print("[SyncManager] No sync results accumulated - observers found no data to sync")
+                let summaryResult = SyncResult(
+                    success: true,
+                    timestamp: Date(),
+                    recordsReceived: 0,
+                    recordsInserted: 0,
+                    duplicatesSkipped: 0,
+                    warningsCount: 0,
+                    errorsCount: 0
+                )
+                self.currentSyncResults = [summaryResult]
+            }
+            
+            // Update backendStore with all combined results
+            self.backendStore.lastSyncResults = self.currentSyncResults
+            
+            // Call the callback once with all combined results
+            let totalRecords = self.currentSyncResults.reduce(0) { $0 + $1.recordsReceived }
+            print("[SyncManager] Updating diagnostics with \(self.currentSyncResults.count) combined result(s) (total records: \(totalRecords))")
+            
+            // Call the callback after restoring it
+            // This ensures the ViewModel's onSyncComplete callback gets the combined results
+            self.backendStore.onSyncComplete?(self.currentSyncResults)
+            
+            self.isSyncing = false
+            self.lastSyncDate = Date()
             
             // Report completion
             if syncErrors.isEmpty {
                 print("[SyncManager] Manual sync completed successfully")
-                    self.onSyncStatusChanged?(false, self.lastSyncDate, nil)
-                    completion(true, nil)
+                self.onSyncStatusChanged?(false, self.lastSyncDate, nil)
+                completion(true, nil)
             } else {
                 let firstError = syncErrors.first!
                 print("[SyncManager] Manual sync completed with \(syncErrors.count) error(s)")
                 self.onSyncStatusChanged?(false, self.lastSyncDate, firstError)
                 completion(false, firstError)
             }
+            
+            // Clear accumulating results for next sync
+            self.currentSyncResults = []
         }
     }
     
@@ -957,6 +1075,47 @@ public class SyncManager: NSObject, HDSQueryObserverDelegate {
         UserDefaults.standard.removeObject(forKey: "GymDashSync.ClientId")
         isAuthorized = false
         onSyncStatusChanged?(false, nil, nil)
+    }
+    
+    /// Resets all anchor states to force a full re-sync of all data
+    /// This clears all stored anchors and last execution dates for all observers,
+    /// so the next sync will re-query all HealthKit data from scratch
+    public func resetAllAnchors() {
+        print("[SyncManager] Resetting all anchor states for full re-sync...")
+        
+        let observers = hdsManager.allObservers
+        let userDefaults = UserDefaults.standard
+        
+        if observers.isEmpty {
+            print("[SyncManager] WARNING: No observers found. Make sure permissions are granted and observers are added.")
+        } else {
+            print("[SyncManager] Found \(observers.count) observer(s) to reset")
+        }
+        
+        var resetCount = 0
+        for observer in observers {
+            if let identifier = observer.externalObjectType.healthKitObjectType()?.identifier {
+                // Clear anchor
+                let anchorKey = identifier + "-Anchor"
+                if userDefaults.object(forKey: anchorKey) != nil {
+                    userDefaults.removeObject(forKey: anchorKey)
+                    resetCount += 1
+                }
+                print("[SyncManager] Cleared anchor for: \(identifier)")
+                
+                // Clear last execution date
+                let lastExecutionKey = identifier + "-Last-Execution-Date"
+                if userDefaults.object(forKey: lastExecutionKey) != nil {
+                    userDefaults.removeObject(forKey: lastExecutionKey)
+                }
+                print("[SyncManager] Cleared last execution date for: \(identifier)")
+            } else {
+                print("[SyncManager] WARNING: Could not get identifier for observer type: \(observer.externalObjectType)")
+            }
+        }
+        
+        userDefaults.synchronize()
+        print("[SyncManager] All anchors reset (\(resetCount) anchor(s) cleared). Next sync will re-query all data from HealthKit.")
     }
     
     // MARK: - HDSQueryObserverDelegate

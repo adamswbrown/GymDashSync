@@ -563,6 +563,21 @@ struct DebugView: View {
                 
                 Section(header: Text("Actions")) {
                     Button(action: {
+                        viewModel.forceResync()
+                    }) {
+                        HStack {
+                            Text("Force Re-Sync All Data")
+                                .foregroundColor(.blue)
+                            Spacer()
+                            if viewModel.isSyncing {
+                                ProgressView()
+                                    .progressViewStyle(CircularProgressViewStyle())
+                            }
+                        }
+                    }
+                    .disabled(viewModel.isSyncing || !viewModel.isAuthorized)
+                    
+                    Button(action: {
                         viewModel.resetAuthorization()
                         presentationMode.wrappedValue.dismiss()
                     }) {

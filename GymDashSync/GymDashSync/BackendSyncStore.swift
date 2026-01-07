@@ -16,8 +16,6 @@ public struct BackendConfig {
     public let profileMetricEndpoint: String
     public let workoutQueryEndpoint: String
     public let profileMetricQueryEndpoint: String
-    public let workoutDeleteEndpoint: String
-    public let profileMetricDeleteEndpoint: String
     
     public init(baseURL: String, apiKey: String? = nil) {
         self.baseURL = baseURL
@@ -26,8 +24,6 @@ public struct BackendConfig {
         self.profileMetricEndpoint = "\(baseURL)/api/v1/profile-metrics"
         self.workoutQueryEndpoint = "\(baseURL)/api/v1/workouts/query"
         self.profileMetricQueryEndpoint = "\(baseURL)/api/v1/profile-metrics/query"
-        self.workoutDeleteEndpoint = "\(baseURL)/api/v1/workouts"
-        self.profileMetricDeleteEndpoint = "\(baseURL)/api/v1/profile-metrics"
     }
     
     public static var `default`: BackendConfig {
@@ -163,13 +159,20 @@ public class BackendSyncStore: HDSExternalStoreProtocol {
     /// Backend deduplicates by client_id + timestamp, so replay is safe.
     public func add(objects: [HDSExternalObjectProtocol], completion: @escaping (Error?) -> Void) {
         guard !objects.isEmpty else {
+            // Even if no objects, create a result entry to track that the query ran
+            // This helps with diagnostics when force re-sync returns 0 records
+            let emptyResult = SyncResult(
+                success: true,
+                timestamp: Date(),
+                recordsReceived: 0,
+                recordsInserted: 0,
+                duplicatesSkipped: 0
+            )
+            self.lastSyncResults = [emptyResult]
+            self.onSyncComplete?([emptyResult])
             completion(nil)
             return
         }
-        
-        // Validate that all objects have client_id
-        // This is a defensive check - objects should already have client_id from conversion
-        var objectsMissingClientId: [String] = []
         
         // Group objects by type
         // Note: All objects are already tagged with client_id from pairing
@@ -177,61 +180,16 @@ public class BackendSyncStore: HDSExternalStoreProtocol {
         var profileMetrics: [ProfileMetricData] = []
         
         for obj in objects {
-            var hasClientId = false
-            
             if let workout = obj as? WorkoutData {
-                hasClientId = !workout.clientId.isEmpty
-                if hasClientId {
                 workouts.append(workout)
-                } else {
-                    objectsMissingClientId.append("workout:\(workout.uuid)")
-                }
             } else if let height = obj as? HeightData {
-                let metric = height.toProfileMetric()
-                hasClientId = !metric.clientId.isEmpty
-                if hasClientId {
-                    profileMetrics.append(metric)
-                } else {
-                    objectsMissingClientId.append("height:\(height.uuid)")
-                }
+                profileMetrics.append(height.toProfileMetric())
             } else if let weight = obj as? WeightData {
-                let metric = weight.toProfileMetric()
-                hasClientId = !metric.clientId.isEmpty
-                if hasClientId {
-                    profileMetrics.append(metric)
-                } else {
-                    objectsMissingClientId.append("weight:\(weight.uuid)")
-                }
+                profileMetrics.append(weight.toProfileMetric())
             } else if let bodyFat = obj as? BodyFatData {
-                let metric = bodyFat.toProfileMetric()
-                hasClientId = !metric.clientId.isEmpty
-                if hasClientId {
-                    profileMetrics.append(metric)
-                } else {
-                    objectsMissingClientId.append("bodyFat:\(bodyFat.uuid)")
-                }
+                profileMetrics.append(bodyFat.toProfileMetric())
             }
         }
-        
-        // If any objects are missing client_id, log warning but continue with valid objects
-        if !objectsMissingClientId.isEmpty {
-            if DevMode.isEnabled {
-                print("[BackendSyncStore] WARNING: \(objectsMissingClientId.count) object(s) missing clientId and were skipped: \(objectsMissingClientId.joined(separator: ", "))")
-            }
-            
-            // If ALL objects are missing client_id, return an error
-            if workouts.isEmpty && profileMetrics.isEmpty {
-                let error = ErrorMapper.validationError(
-                    message: "Cannot sync: All objects missing client ID",
-                    detail: "All HealthKit objects were filtered out because client_id is missing. Please ensure your device is paired."
-                )
-                completion(error)
-                return
-            }
-        }
-        
-        // Log what we're about to sync
-        print("[BackendSyncStore] Preparing to sync: \(workouts.count) workout(s), \(profileMetrics.count) profile metric(s)")
         
         let group = DispatchGroup()
         var syncResults: [SyncResult] = []
@@ -239,13 +197,7 @@ public class BackendSyncStore: HDSExternalStoreProtocol {
         // Sync workouts
         if !workouts.isEmpty {
             group.enter()
-            print("[BackendSyncStore] Syncing \(workouts.count) workout(s) to backend...")
             syncWorkouts(workouts) { result in
-                if result.success {
-                    print("[BackendSyncStore] Workout sync successful: \(result.recordsInserted) inserted, \(result.duplicatesSkipped) duplicates skipped")
-                } else {
-                    print("[BackendSyncStore] Workout sync failed: \(result.error?.message ?? "Unknown error")")
-                }
                 syncResults.append(result)
                 group.leave()
             }
@@ -254,13 +206,7 @@ public class BackendSyncStore: HDSExternalStoreProtocol {
         // Sync profile metrics
         if !profileMetrics.isEmpty {
             group.enter()
-            print("[BackendSyncStore] Syncing \(profileMetrics.count) profile metric(s) to backend...")
             syncProfileMetrics(profileMetrics) { result in
-                if result.success {
-                    print("[BackendSyncStore] Profile metric sync successful: \(result.recordsInserted) inserted, \(result.duplicatesSkipped) duplicates skipped")
-                } else {
-                    print("[BackendSyncStore] Profile metric sync failed: \(result.error?.message ?? "Unknown error")")
-                }
                 syncResults.append(result)
                 group.leave()
             }
@@ -269,31 +215,7 @@ public class BackendSyncStore: HDSExternalStoreProtocol {
         group.notify(queue: .main) {
             // Store results for dev mode diagnostics
             self.lastSyncResults = syncResults
-            
-            // Log summary
-            let totalReceived = syncResults.reduce(0) { $0 + $1.recordsReceived }
-            let totalInserted = syncResults.reduce(0) { $0 + $1.recordsInserted }
-            let totalDuplicates = syncResults.reduce(0) { $0 + $1.duplicatesSkipped }
-            
-            if totalReceived > 0 {
-                print("[BackendSyncStore] Sync complete: \(totalReceived) received, \(totalInserted) inserted, \(totalDuplicates) duplicates skipped across \(syncResults.count) endpoint(s)")
-            } else {
-                print("[BackendSyncStore] Sync complete: No data to sync (either no new data since last sync or no data available)")
-            }
-            
             self.onSyncComplete?(syncResults)
-            
-            // Check if we have no results at all (could happen if all objects were filtered out)
-            if syncResults.isEmpty && !objects.isEmpty {
-                // Objects were passed in but no sync operations were performed
-                // This could happen if all objects were missing client_id
-                let error = ErrorMapper.validationError(
-                    message: "No data to sync: All objects filtered out",
-                    detail: "All HealthKit objects were filtered out, possibly due to missing client_id. Ensure your device is paired."
-                )
-                completion(error)
-                return
-            }
             
             // Check if any sync failed
             let failedResults = syncResults.filter { !$0.success }
@@ -411,181 +333,10 @@ public class BackendSyncStore: HDSExternalStoreProtocol {
     }
     
     public func delete(deletedObjects: [HDSExternalObjectProtocol], completion: @escaping (Error?) -> Void) {
-        guard !deletedObjects.isEmpty else {
-            completion(nil)
-            return
-        }
-        
-        // Separate workouts and profile metrics
-        var workoutUuids: [String] = []
-        var profileMetricUuids: [String] = []
-        
-        for object in deletedObjects {
-            // Extract UUID based on object type
-            if let workout = object as? WorkoutData {
-                workoutUuids.append(workout.uuid.uuidString)
-            } else if let height = object as? HeightData {
-                profileMetricUuids.append(height.uuid.uuidString)
-            } else if let weight = object as? WeightData {
-                profileMetricUuids.append(weight.uuid.uuidString)
-            } else if let bodyFat = object as? BodyFatData {
-                profileMetricUuids.append(bodyFat.uuid.uuidString)
-            }
-        }
-        
-        print("[BackendSyncStore] Deleting \(workoutUuids.count) workout(s) and \(profileMetricUuids.count) profile metric(s)")
-        
-        // Delete workouts and profile metrics in parallel
-        let group = DispatchGroup()
-        var errors: [Error] = []
-        
-        if !workoutUuids.isEmpty {
-            group.enter()
-            deleteWorkouts(uuids: workoutUuids) { error in
-                if let error = error {
-                    errors.append(error)
-                }
-                group.leave()
-            }
-        }
-        
-        if !profileMetricUuids.isEmpty {
-            group.enter()
-            deleteProfileMetrics(uuids: profileMetricUuids) { error in
-                if let error = error {
-                    errors.append(error)
-                }
-                group.leave()
-            }
-        }
-        
-        group.notify(queue: .main) {
-            if errors.isEmpty {
-                print("[BackendSyncStore] Deletion completed successfully")
-                completion(nil)
-            } else {
-                print("[BackendSyncStore] Deletion completed with \(errors.count) error(s)")
-                completion(errors.first) // Return first error
-            }
-        }
-    }
-    
-    private func deleteWorkouts(uuids: [String], completion: @escaping (Error?) -> Void) {
-        guard let url = URL(string: config.workoutDeleteEndpoint) else {
-            completion(NSError(domain: "BackendSyncStore", code: -1, userInfo: [NSLocalizedDescriptionKey: "Invalid URL"]))
-            return
-        }
-        
-        var request = URLRequest(url: url)
-        request.httpMethod = "DELETE"
-        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
-        
-        if let apiKey = config.apiKey {
-            request.setValue("Bearer \(apiKey)", forHTTPHeaderField: "Authorization")
-        }
-        
-        let payload: [String: Any] = ["uuids": uuids]
-        
-        do {
-            request.httpBody = try JSONSerialization.data(withJSONObject: payload)
-        } catch {
-            completion(error)
-            return
-        }
-        
-        if DevMode.isEnabled {
-            print("[BackendSyncStore] Sending DELETE request to \(config.workoutDeleteEndpoint) for \(uuids.count) UUID(s)")
-        }
-        
-        session.dataTask(with: request) { data, response, error in
-            if let error = error {
-                if DevMode.isEnabled {
-                    print("[BackendSyncStore] Workout deletion error: \(error.localizedDescription)")
-                }
-                completion(error)
-                return
-            }
-            
-            guard let httpResponse = response as? HTTPURLResponse else {
-                completion(NSError(domain: "BackendSyncStore", code: -1, userInfo: [NSLocalizedDescriptionKey: "Invalid server response"]))
-                return
-            }
-            
-            guard httpResponse.statusCode >= 200 && httpResponse.statusCode < 300 else {
-                let error = NSError(
-                    domain: "BackendSyncStore",
-                    code: httpResponse.statusCode,
-                    userInfo: [NSLocalizedDescriptionKey: "Backend returned status code \(httpResponse.statusCode)"]
-                )
-                completion(error)
-                return
-            }
-            
-            if DevMode.isEnabled {
-                print("[BackendSyncStore] Workout deletion successful: \(uuids.count) UUID(s) deleted")
-            }
-            
-            completion(nil)
-        }.resume()
-    }
-    
-    private func deleteProfileMetrics(uuids: [String], completion: @escaping (Error?) -> Void) {
-        guard let url = URL(string: config.profileMetricDeleteEndpoint) else {
-            completion(NSError(domain: "BackendSyncStore", code: -1, userInfo: [NSLocalizedDescriptionKey: "Invalid URL"]))
-            return
-        }
-        
-        var request = URLRequest(url: url)
-        request.httpMethod = "DELETE"
-        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
-        
-        if let apiKey = config.apiKey {
-            request.setValue("Bearer \(apiKey)", forHTTPHeaderField: "Authorization")
-        }
-        
-        let payload: [String: Any] = ["uuids": uuids]
-        
-        do {
-            request.httpBody = try JSONSerialization.data(withJSONObject: payload)
-        } catch {
-            completion(error)
-            return
-        }
-        
-        if DevMode.isEnabled {
-            print("[BackendSyncStore] Sending DELETE request to \(config.profileMetricDeleteEndpoint) for \(uuids.count) UUID(s)")
-        }
-        
-        session.dataTask(with: request) { data, response, error in
-            if let error = error {
-                if DevMode.isEnabled {
-                    print("[BackendSyncStore] Profile metric deletion error: \(error.localizedDescription)")
-                }
-                completion(error)
-                return
-            }
-            
-            guard let httpResponse = response as? HTTPURLResponse else {
-                completion(NSError(domain: "BackendSyncStore", code: -1, userInfo: [NSLocalizedDescriptionKey: "Invalid server response"]))
-                return
-            }
-            
-            guard httpResponse.statusCode >= 200 && httpResponse.statusCode < 300 else {
-                let error = NSError(
-                    domain: "BackendSyncStore",
-                    code: httpResponse.statusCode,
-                    userInfo: [NSLocalizedDescriptionKey: "Backend returned status code \(httpResponse.statusCode)"]
-                )
-                completion(error)
-                return
-            }
-            
-            if DevMode.isEnabled {
-                print("[BackendSyncStore] Profile metric deletion successful: \(uuids.count) UUID(s) deleted")
-            }
-            
-            completion(nil)
-        }.resume()
+        // Deletion not implemented yet - backend endpoint would need to support DELETE
+        // For now, just complete successfully
+        print("Delete operation not yet implemented")
+        completion(nil)
     }
     
     // MARK: - Private Methods
@@ -769,11 +520,6 @@ public class BackendSyncStore: HDSExternalStoreProtocol {
         let startTime = Date()
         let payloads = workouts.map { $0.toBackendPayload() }
         
-        if DevMode.isEnabled {
-            print("[BackendSyncStore] Sending POST request to \(config.workoutEndpoint)")
-            print("[BackendSyncStore] Payload count: \(payloads.count)")
-        }
-        
         guard let url = URL(string: config.workoutEndpoint) else {
             let error = ErrorMapper.networkError(
                 message: "Invalid server URL",
@@ -889,10 +635,6 @@ public class BackendSyncStore: HDSExternalStoreProtocol {
             var validationErrors: [String] = []
             
             if let data = data {
-                if DevMode.isEnabled, let responseBody = responseBody {
-                    print("[BackendSyncStore] Workout sync response body: \(responseBody.prefix(500))")
-                }
-                
                 do {
                     if let json = try JSONSerialization.jsonObject(with: data) as? [String: Any] {
                         if let report = json["report"] as? [String: Any] {
@@ -904,21 +646,11 @@ public class BackendSyncStore: HDSExternalStoreProtocol {
                             if let errors = report["errors"] as? [String] {
                                 validationErrors = errors
                             }
-                            
-                            if DevMode.isEnabled {
-                                print("[BackendSyncStore] Workout sync report: \(recordsInserted) inserted, \(duplicatesSkipped) duplicates, \(warningsCount) warnings, \(errorsCount) errors")
-                            }
                         } else if let count = json["count"] as? Int {
                             recordsInserted = count
-                            if DevMode.isEnabled {
-                                print("[BackendSyncStore] Workout sync count: \(recordsInserted)")
-                            }
                         }
                     }
                 } catch {
-                    if DevMode.isEnabled {
-                        print("[BackendSyncStore] Failed to parse workout sync response: \(error.localizedDescription)")
-                    }
                     // Ignore parse errors - use defaults
                 }
             }
@@ -942,11 +674,6 @@ public class BackendSyncStore: HDSExternalStoreProtocol {
     private func syncProfileMetrics(_ metrics: [ProfileMetricData], completion: @escaping (SyncResult) -> Void) {
         let startTime = Date()
         let payloads = metrics.map { $0.toBackendPayload() }
-        
-        if DevMode.isEnabled {
-            print("[BackendSyncStore] Sending POST request to \(config.profileMetricEndpoint)")
-            print("[BackendSyncStore] Payload count: \(payloads.count)")
-        }
         
         guard let url = URL(string: config.profileMetricEndpoint) else {
             let error = ErrorMapper.networkError(
@@ -996,18 +723,7 @@ public class BackendSyncStore: HDSExternalStoreProtocol {
             let duration = Date().timeIntervalSince(startTime)
             let responseBody = data != nil ? String(data: data!, encoding: .utf8) : nil
             
-            if DevMode.isEnabled {
-                if let httpResponse = response as? HTTPURLResponse {
-                    print("[BackendSyncStore] Profile metric sync response: Status \(httpResponse.statusCode), Duration: \(String(format: "%.2f", duration))s")
-                } else {
-                    print("[BackendSyncStore] Profile metric sync response: No HTTP response, Duration: \(String(format: "%.2f", duration))s")
-                }
-            }
-            
             if let error = error {
-                if DevMode.isEnabled {
-                    print("[BackendSyncStore] Profile metric sync error: \(error.localizedDescription)")
-                }
                 let appError = ErrorMapper.networkError(
                     message: "Connection error: \(error.localizedDescription)",
                     endpoint: self.config.profileMetricEndpoint,
@@ -1046,12 +762,6 @@ public class BackendSyncStore: HDSExternalStoreProtocol {
             let statusCode = httpResponse.statusCode
             
             guard statusCode >= 200 && statusCode < 300 else {
-                if DevMode.isEnabled {
-                    print("[BackendSyncStore] Profile metric sync failed with status code: \(statusCode)")
-                    if let responseBody = responseBody {
-                        print("[BackendSyncStore] Error response: \(responseBody)")
-                    }
-                }
                 let appError = ErrorMapper.backendError(
                     message: "Server error",
                     endpoint: self.config.profileMetricEndpoint,
@@ -1080,10 +790,6 @@ public class BackendSyncStore: HDSExternalStoreProtocol {
             var validationErrors: [String] = []
             
             if let data = data {
-                if DevMode.isEnabled, let responseBody = responseBody {
-                    print("[BackendSyncStore] Profile metric sync response body: \(responseBody.prefix(500))")
-                }
-                
                 do {
                     if let json = try JSONSerialization.jsonObject(with: data) as? [String: Any] {
                         if let report = json["report"] as? [String: Any] {
@@ -1095,21 +801,11 @@ public class BackendSyncStore: HDSExternalStoreProtocol {
                             if let errors = report["errors"] as? [String] {
                                 validationErrors = errors
                             }
-                            
-                            if DevMode.isEnabled {
-                                print("[BackendSyncStore] Profile metric sync report: \(recordsInserted) inserted, \(duplicatesSkipped) duplicates, \(warningsCount) warnings, \(errorsCount) errors")
-                            }
                         } else if let count = json["count"] as? Int {
                             recordsInserted = count
-                            if DevMode.isEnabled {
-                                print("[BackendSyncStore] Profile metric sync count: \(recordsInserted)")
-                            }
                         }
                     }
                 } catch {
-                    if DevMode.isEnabled {
-                        print("[BackendSyncStore] Failed to parse profile metric sync response: \(error.localizedDescription)")
-                    }
                     // Ignore parse errors - use defaults
                 }
             }

@@ -111,7 +111,7 @@ public struct WorkoutData: HDSExternalObjectProtocol, Codable {
         // Extract metrics from workout
         var activeEnergy: Double? = nil
         var distance: Double? = nil
-        let avgHeartRate: Double? = nil
+        var avgHeartRate: Double? = nil
         
         // Active energy burned
         if #available(iOS 18.0, *) {
@@ -129,9 +129,24 @@ public struct WorkoutData: HDSExternalObjectProtocol, Codable {
             distance = workoutDistance.doubleValue(for: HKUnit.meter())
         }
         
-        // Heart rate - would need to query separately, but for now we'll use summary if available
-        // Note: HKWorkout doesn't directly contain heart rate, it's in associated samples
-        // This is a simplified version - in production you might want to query heart rate samples
+        // Heart rate - use statistics API (iOS 18.0+) or query samples
+        if #available(iOS 18.0, *) {
+            // iOS 18.0+ provides direct access to workout statistics
+            if let stats = workout.statistics(for: .init(.heartRate)), let average = stats.averageQuantity() {
+                avgHeartRate = average.doubleValue(for: HKUnit.count().unitDivided(by: HKUnit.minute()))
+                if DevMode.isEnabled {
+                    print("[WorkoutData] Extracted average heart rate from workout statistics: \(avgHeartRate ?? 0) bpm")
+                }
+            }
+        } else {
+            // For iOS < 18.0, we would need to query heart rate samples separately
+            // This is more complex and requires async queries, so for now we'll leave it as nil
+            // In production, you might want to use HKSampleQuery to fetch heart rate samples
+            // associated with this workout's time range
+            if DevMode.isEnabled {
+                print("[WorkoutData] Heart rate extraction requires iOS 18.0+ or manual sample query for older versions")
+            }
+        }
         
         // Determine source device from multiple sources
         var sourceDevice: String? = nil
