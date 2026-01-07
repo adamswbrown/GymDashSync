@@ -315,66 +315,132 @@ public class SyncManager: NSObject, HDSQueryObserverDelegate {
                 return
             }
             
-            print("[SyncManager] Authorization check: All types show .sharingDenied, but performing test read to verify actual access...")
+            print("[SyncManager] Authorization check: All types show .sharingDenied, but performing test reads to verify actual access...")
             isTestReadInProgress = true
             
-            // Perform a test read query to verify we can actually read data
+            // Perform test reads for all types (workout, height, weight)
             // This is the authoritative check for read-only permissions
-            let testQuery = HKSampleQuery(
+            // We consider the app authorized if ANY test read succeeds
+            let dispatchGroup = DispatchGroup()
+            var workoutAuthorized = false
+            var heightAuthorized = false
+            var weightAuthorized = false
+            
+            // Test workout read
+            dispatchGroup.enter()
+            let workoutTestQuery = HKSampleQuery(
                 sampleType: workoutType as! HKSampleType,
                 predicate: nil,
                 limit: 1,
                 sortDescriptors: nil
-            ) { [weak self] query, samples, error in
-                DispatchQueue.main.async {
-                    guard let self = self else { return }
-                    
-                    // Clear the in-progress flag
-                    self.isTestReadInProgress = false
-                    
-                    let wasAuthorized = self.isAuthorized
-                    
-                    if error == nil && samples != nil {
-                        // We can read data - permissions are actually granted (read-only)
-                        print("[SyncManager] Authorization check: Test read SUCCESS - can read workout data (read-only permissions granted)")
-                        self.isAuthorized = true
-                    } else if let error = error as? HKError, error.code == .errorAuthorizationDenied {
-                        // Definitely denied
-                        print("[SyncManager] Authorization check: Test read FAILED - authorization denied: \(error.localizedDescription)")
-                        self.isAuthorized = false
-                    } else {
-                        // No data or other error - but we can query, so permissions are granted
-                        print("[SyncManager] Authorization check: Test read completed - can query (permissions granted, may have no data)")
-                        self.isAuthorized = true
-                    }
-                    
-                    // Always notify observers when test read completes (even if status didn't change)
-                    // This ensures UI updates even if isAuthorized was already true
-                    print("[SyncManager] Authorization status after test read: \(self.isAuthorized)")
-                    NotificationCenter.default.post(name: NSNotification.Name("HealthKitAuthorizationStatusChanged"), object: nil)
-                    
-                    // Also trigger the sync status callback if status changed
-                    if wasAuthorized != self.isAuthorized {
-                        print("[SyncManager] Authorization status changed: \(wasAuthorized) -> \(self.isAuthorized)")
-                        self.onSyncStatusChanged?(false, self.lastSyncDate, nil)
-                    }
+            ) { query, samples, error in
+                if error == nil {
+                    // Can query (even if no data) = permissions granted
+                    workoutAuthorized = true
+                    print("[SyncManager] Authorization check: Workout test read SUCCESS")
+                } else if let error = error as? HKError, error.code == .errorAuthorizationDenied {
+                    print("[SyncManager] Authorization check: Workout test read DENIED")
+                } else {
+                    // Other error but can query = permissions granted
+                    workoutAuthorized = true
+                    print("[SyncManager] Authorization check: Workout test read completed (permissions granted, may have no data)")
+                }
+                dispatchGroup.leave()
+            }
+            store.execute(workoutTestQuery)
+            
+            // Test height read
+            dispatchGroup.enter()
+            let heightTestQuery = HKSampleQuery(
+                sampleType: heightType as! HKSampleType,
+                predicate: nil,
+                limit: 1,
+                sortDescriptors: nil
+            ) { query, samples, error in
+                if error == nil {
+                    heightAuthorized = true
+                    print("[SyncManager] Authorization check: Height test read SUCCESS")
+                } else if let error = error as? HKError, error.code == .errorAuthorizationDenied {
+                    print("[SyncManager] Authorization check: Height test read DENIED")
+                } else {
+                    heightAuthorized = true
+                    print("[SyncManager] Authorization check: Height test read completed (permissions granted, may have no data)")
+                }
+                dispatchGroup.leave()
+            }
+            store.execute(heightTestQuery)
+            
+            // Test weight read
+            dispatchGroup.enter()
+            let weightTestQuery = HKSampleQuery(
+                sampleType: weightType as! HKSampleType,
+                predicate: nil,
+                limit: 1,
+                sortDescriptors: nil
+            ) { query, samples, error in
+                if error == nil {
+                    weightAuthorized = true
+                    print("[SyncManager] Authorization check: Weight test read SUCCESS")
+                } else if let error = error as? HKError, error.code == .errorAuthorizationDenied {
+                    print("[SyncManager] Authorization check: Weight test read DENIED")
+                } else {
+                    weightAuthorized = true
+                    print("[SyncManager] Authorization check: Weight test read completed (permissions granted, may have no data)")
+                }
+                dispatchGroup.leave()
+            }
+            store.execute(weightTestQuery)
+            
+            // Wait for all test reads to complete, then update authorization status
+            dispatchGroup.notify(queue: .main) { [weak self] in
+                guard let self = self else { return }
+                
+                // Clear the in-progress flag
+                self.isTestReadInProgress = false
+                
+                let wasAuthorized = self.isAuthorized
+                // Authorized if ANY test read succeeded
+                self.isAuthorized = workoutAuthorized || heightAuthorized || weightAuthorized
+                
+                print("[SyncManager] Authorization check: Test reads completed - workout=\(workoutAuthorized), height=\(heightAuthorized), weight=\(weightAuthorized), isAuthorized=\(self.isAuthorized)")
+                
+                // Always notify observers when test reads complete (even if status didn't change)
+                // This ensures UI updates even if isAuthorized was already true
+                NotificationCenter.default.post(name: NSNotification.Name("HealthKitAuthorizationStatusChanged"), object: nil)
+                
+                // Also trigger the sync status callback if status changed
+                if wasAuthorized != self.isAuthorized {
+                    print("[SyncManager] Authorization status changed: \(wasAuthorized) -> \(self.isAuthorized)")
+                    self.onSyncStatusChanged?(false, self.lastSyncDate, nil)
                 }
             }
             
-            store.execute(testQuery)
-            // Set temporary state - will be updated by query completion
-            isAuthorized = false
+            // Don't set isAuthorized = false here - keep the current state until test reads complete
+            // This prevents the UI from flickering to "Not Authorized" during test reads
             return
         }
         
         // Mixed state - some not determined, some denied
-        // Consider authorized if any is not denied (user might grant on next request)
+        // If any type is explicitly authorized, we're authorized
+        // If any type is denied, we should do test reads to verify actual access
+        // Only consider authorized if at least one type is .sharingAuthorized
         let wasAuthorized = isAuthorized
-        let anyNotDenied = workoutStatus != .sharingDenied || 
-                          heightStatus != .sharingDenied || 
-                          weightStatus != .sharingDenied
+        let anyAuthorized = workoutStatus == .sharingAuthorized || 
+                           heightStatus == .sharingAuthorized || 
+                           weightStatus == .sharingAuthorized
         
-        isAuthorized = anyNotDenied
+        // If any type is explicitly authorized, we're definitely authorized
+        if anyAuthorized {
+            isAuthorized = true
+            print("[SyncManager] Authorization check: At least one type is .sharingAuthorized - authorized")
+        } else {
+            // No types are explicitly authorized, but some might be denied
+            // If we have any denied types, we should do test reads (but we already checked allDenied above)
+            // For mixed state (some .notDetermined, some denied), we're not authorized yet
+            // but we also shouldn't show as denied - keep current state or set to false
+            isAuthorized = false
+            print("[SyncManager] Authorization check: Mixed state - no types explicitly authorized, isAuthorized=false")
+        }
         
         print("[SyncManager] Authorization check: workout=\(workoutStatus.rawValue), height=\(heightStatus.rawValue), weight=\(weightStatus.rawValue), isAuthorized=\(isAuthorized)")
         
