@@ -36,6 +36,10 @@ public class SyncManager: NSObject, HDSQueryObserverDelegate {
     private var currentSyncResults: [SyncResult] = []
     private var originalOnSyncComplete: (([SyncResult]) -> Void)?
     
+    // Track last known client ID to detect changes
+    // When client ID changes, we need to reset anchors to force full re-sync
+    private var lastKnownClientId: String?
+    
     public init(backendConfig: BackendConfig = .default) {
         self.hdsManager = HDSManagerFactory.manager()
         self.backendStore = BackendSyncStore(config: backendConfig)
@@ -49,6 +53,9 @@ public class SyncManager: NSObject, HDSQueryObserverDelegate {
         
         // Check authorization status
         checkAuthorizationStatus()
+        
+        // Track initial client ID
+        lastKnownClientId = UserDefaults.standard.string(forKey: "GymDashSync.ClientId")
         
         // If already authorized, ensure observers are initialized
         // This handles the case where app restarts but permissions were already granted
@@ -949,6 +956,21 @@ public class SyncManager: NSObject, HDSQueryObserverDelegate {
             completion(false, NSError(domain: "SyncManager", code: -1, userInfo: [NSLocalizedDescriptionKey: "Sync already in progress"]))
             return
         }
+        
+        // Check if client ID has changed - if so, reset anchors to force full re-sync
+        let currentClientId = UserDefaults.standard.string(forKey: "GymDashSync.ClientId")
+        if let lastClientId = lastKnownClientId, let currentId = currentClientId {
+            if lastClientId != currentId {
+                print("[SyncManager] Client ID changed from \(lastClientId) to \(currentId) - resetting anchors for full re-sync")
+                resetAllAnchors()
+            }
+        } else if let currentId = currentClientId, lastKnownClientId == nil {
+            // First time syncing with a client ID - ensure anchors are cleared
+            print("[SyncManager] First sync with client ID \(currentId) - ensuring anchors are cleared")
+            resetAllAnchors()
+        }
+        // Update tracked client ID
+        lastKnownClientId = currentClientId
         
         isSyncing = true
         onSyncStatusChanged?(true, lastSyncDate, nil)
