@@ -96,6 +96,9 @@ public struct WorkoutData: HDSExternalObjectProtocol, Codable {
         guard let clientId = UserDefaults.standard.string(forKey: "GymDashSync.ClientId"), !clientId.isEmpty else {
             // Expected: client_id not set means pairing hasn't completed
             // This is not an error - just means we can't sync yet
+            if DevMode.isEnabled {
+                print("[WorkoutData] WARNING: Cannot convert workout to external object - clientId missing from UserDefaults. Workout UUID: \(workout.uuid)")
+            }
             return nil
         }
         
@@ -111,13 +114,14 @@ public struct WorkoutData: HDSExternalObjectProtocol, Codable {
         let avgHeartRate: Double? = nil
         
         // Active energy burned
-        // Note: totalEnergyBurned is deprecated in iOS 18.0, but it's still the correct API
-        // for accessing energy from an HKWorkout object. The new statistics API requires
-        // querying the health store separately, which is more complex.
-        // We intentionally use the deprecated API for simplicity and compatibility.
-        // This generates a deprecation warning but the code is correct and functional.
-        if let energy = workout.totalEnergyBurned {
-            activeEnergy = energy.doubleValue(for: HKUnit.kilocalorie())
+        if #available(iOS 18.0, *) {
+            if let stats = workout.statistics(for: .init(.activeEnergyBurned)), let sum = stats.sumQuantity() {
+                activeEnergy = sum.doubleValue(for: .kilocalorie())
+            }
+        } else {
+            if let energy = workout.totalEnergyBurned {
+                activeEnergy = energy.doubleValue(for: .kilocalorie())
+            }
         }
         
         // Distance (check both walking/running and cycling)
@@ -129,11 +133,54 @@ public struct WorkoutData: HDSExternalObjectProtocol, Codable {
         // Note: HKWorkout doesn't directly contain heart rate, it's in associated samples
         // This is a simplified version - in production you might want to query heart rate samples
         
-        // Determine source device
+        // Determine source device from multiple sources
         var sourceDevice: String? = nil
+        
+        // Method 1: Check metadata for device name
         if let metadata = workout.metadata, let deviceName = metadata[HKMetadataKeyDeviceName] as? String {
-            sourceDevice = deviceName.lowercased().contains("watch") ? "apple_watch" : "iphone"
+            let lowerName = deviceName.lowercased()
+            if lowerName.contains("watch") {
+                sourceDevice = "apple_watch"
+            } else if lowerName.contains("iphone") || lowerName.contains("ipad") {
+                sourceDevice = "iphone"
+            } else {
+                // Unknown device - store the actual name for debugging
+                sourceDevice = deviceName
+            }
+            
+            if DevMode.isEnabled {
+                print("[WorkoutData] Device from metadata: \(deviceName) -> \(sourceDevice ?? "unknown")")
+            }
         }
+        
+        // Method 2: Check sourceRevision for device info (if metadata didn't have it)
+        if sourceDevice == nil {
+            let sourceRevision = workout.sourceRevision
+            let sourceName = sourceRevision.source.name.lowercased()
+            
+            // Check if source is Apple Watch (common source names)
+            if sourceName.contains("watch") || sourceName.contains("apple watch") {
+                sourceDevice = "apple_watch"
+            } else if sourceName.contains("iphone") || sourceName.contains("ipad") {
+                sourceDevice = "iphone"
+            } else {
+                // Try to infer from source name patterns
+                // Apple Watch sources often contain "Watch" or have specific patterns
+                if sourceRevision.source.bundleIdentifier.contains("com.apple.health") {
+                    // This is from Health app - could be either, but if we have workout data,
+                    // it's more likely from Watch if it has heart rate data
+                    // For now, we'll leave it as nil
+                }
+            }
+            
+            if DevMode.isEnabled {
+                print("[WorkoutData] Device from sourceRevision: source=\(sourceRevision.source.name), bundle=\(sourceRevision.source.bundleIdentifier), device=\(sourceDevice ?? "nil")")
+            }
+        }
+        
+        // Method 3: If still nil, we could infer from workout characteristics
+        // (e.g., workouts with heart rate are more likely from Watch)
+        // But this is unreliable, so we'll leave it as nil
         
         return WorkoutData(
             uuid: workout.uuid,
@@ -151,6 +198,9 @@ public struct WorkoutData: HDSExternalObjectProtocol, Codable {
     
     public static func externalObject(deletedObject: HKDeletedObject, converter: HDSConverterProtocol?) -> HDSExternalObjectProtocol? {
         guard let clientId = UserDefaults.standard.string(forKey: "GymDashSync.ClientId"), !clientId.isEmpty else {
+            if DevMode.isEnabled {
+                print("[WorkoutData] WARNING: Cannot convert deleted workout to external object - clientId missing from UserDefaults. Deleted UUID: \(deletedObject.uuid)")
+            }
             return nil
         }
         return WorkoutData(
@@ -206,7 +256,8 @@ public struct WorkoutData: HDSExternalObjectProtocol, Codable {
             "workout_type": workoutType,
             "start_time": ISO8601DateFormatter().string(from: startTime), // Preserved from HealthKit
             "end_time": ISO8601DateFormatter().string(from: endTime), // Preserved from HealthKit
-            "duration_seconds": durationSeconds // Calculated from start/end times
+            "duration_seconds": durationSeconds, // Calculated from start/end times
+            "healthkit_uuid": uuid.uuidString // HealthKit UUID for matching and deletion
         ]
         
         if let calories = activeEnergyBurned {

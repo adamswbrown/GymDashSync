@@ -71,9 +71,12 @@ router.post('/workouts/query', (req, res) => {
             });
         }
         
-        // Returns empty array for now (graceful degradation)
-        // iOS client will treat all records as new
+        // Query workouts by UUID
         const workouts = queryWorkoutsByUuids(uuids);
+        console.log(`[READ] Query workouts: requested ${uuids.length} UUID(s), found ${workouts.length} match(es)`);
+        if (uuids.length > 0 && workouts.length === 0) {
+            console.log(`[READ] No UUID matches found - all ${uuids.length} workout(s) will be treated as new`);
+        }
         
         res.status(200).json(workouts);
         

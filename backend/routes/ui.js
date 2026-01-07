@@ -14,7 +14,8 @@ const {
     getClientById,
     getWorkoutsByClientId,
     getProfileMetricsByClientId,
-    getWarningsByClientId
+    getWarningsByClientId,
+    deleteClient
 } = require('../db/queries');
 const { createClient } = require('../db/queries');
 
@@ -101,11 +102,33 @@ router.get('/', (req, res) => {
                 html += `<td>${client.workouts_count || 0}</td>`;
                 html += `<td>${formatDate(client.last_workout_start_time)}</td>`;
                 html += `<td>${warningsBadge}</td>`;
-                html += `<td><a href="/ui/clients/${client.client_id}" class="btn btn-secondary">View</a></td>`;
+                const clientLabelEscaped = (client.label || 'Client').replace(/'/g, "\\'").replace(/"/g, '&quot;').replace(/\n/g, ' ');
+                html += `<td>`;
+                html += `<a href="/ui/clients/${client.client_id}" class="btn btn-secondary">View</a>`;
+                html += `<button onclick="deleteClient('${client.client_id}', '${clientLabelEscaped}', ${client.workouts_count || 0})" class="btn" style="margin-left: 5px; background-color: #dc2626; color: white; font-size: 12px; padding: 5px 10px;">Delete</button>`;
+                html += `</td>`;
                 html += `</tr>`;
             }
             
             html += '</tbody></table>';
+            
+            // Add JavaScript for delete confirmation
+            html += '<script>';
+            html += 'function deleteClient(clientId, clientLabel, workoutsCount) {';
+            html += '    if (confirm("Are you sure you want to delete client \\"" + clientLabel + "\\"?\\n\\nThis will permanently delete:\\n- The client record\\n- All associated workouts (" + workoutsCount + ")\\n- All associated profile metrics\\n- All associated warnings\\n\\nThis action cannot be undone.")) {';
+            html += '        const form = document.createElement("form");';
+            html += '        form.method = "POST";';
+            html += '        form.action = "/ui/clients/" + clientId + "/delete";';
+            html += '        const methodInput = document.createElement("input");';
+            html += '        methodInput.type = "hidden";';
+            html += '        methodInput.name = "_method";';
+            html += '        methodInput.value = "DELETE";';
+            html += '        form.appendChild(methodInput);';
+            html += '        document.body.appendChild(form);';
+            html += '        form.submit();';
+            html += '    }';
+            html += '}';
+            html += '</script>';
         }
         
         const layoutPath = path.join(__dirname, '../views/layout.html');
@@ -306,9 +329,29 @@ router.get('/clients/:client_id', (req, res) => {
             html += '</tbody></table>';
         }
         
+        const clientLabelEscaped = (client.label || 'Client').replace(/'/g, "\\'").replace(/"/g, '&quot;').replace(/\n/g, ' ');
         html += '<div style="margin-top: 30px;">';
         html += '<a href="/ui" class="btn">Back to Clients</a>';
+        html += '<button onclick="deleteClient(\'' + client.client_id + '\', \'' + clientLabelEscaped + '\')" class="btn" style="margin-left: 10px; background-color: #dc2626; color: white;">Delete Client</button>';
         html += '</div>';
+        
+        // Add JavaScript for delete confirmation
+        html += '<script>';
+        html += 'function deleteClient(clientId, clientLabel) {';
+        html += '    if (confirm("Are you sure you want to delete client \\"" + clientLabel + "\\"?\\n\\nThis will permanently delete:\\n- The client record\\n- All associated workouts (' + workouts.length + ')\\n- All associated profile metrics (' + metrics.length + ')\\n- All associated warnings (' + warnings.length + ')\\n\\nThis action cannot be undone.")) {';
+        html += '        const form = document.createElement("form");';
+        html += '        form.method = "POST";';
+        html += '        form.action = "/ui/clients/" + clientId + "/delete";';
+        html += '        const methodInput = document.createElement("input");';
+        html += '        methodInput.type = "hidden";';
+        html += '        methodInput.name = "_method";';
+        html += '        methodInput.value = "DELETE";';
+        html += '        form.appendChild(methodInput);';
+        html += '        document.body.appendChild(form);';
+        html += '        form.submit();';
+        html += '    }';
+        html += '}';
+        html += '</script>';
         
         const layoutPath = path.join(__dirname, '../views/layout.html');
         const layout = fs.readFileSync(layoutPath, 'utf8')
@@ -318,6 +361,49 @@ router.get('/clients/:client_id', (req, res) => {
         
     } catch (error) {
         console.error('[UI] Client detail error:', error);
+        res.status(500).send(`<h2>Error</h2><p>${error.message}</p>`);
+    }
+});
+
+/**
+ * POST /ui/clients/:client_id/delete
+ * Handle client deletion (POST method for form submission, then DELETE internally)
+ */
+router.post('/clients/:client_id/delete', (req, res) => {
+    try {
+        const { client_id } = req.params;
+        
+        // Verify client exists
+        const client = getClientById(client_id);
+        if (!client) {
+            return res.status(404).send('<h2>Client Not Found</h2><p><a href="/ui">Back to Clients</a></p>');
+        }
+        
+        // Delete the client and all associated data
+        const result = deleteClient(client_id);
+        
+        console.log(`[UI] Deleted client: client_id=${client_id}, workouts=${result.workouts_deleted}, metrics=${result.metrics_deleted}, warnings=${result.warnings_deleted}`);
+        
+        // Show success page
+        let html = '<h2>Client Deleted Successfully</h2>';
+        html += '<div style="background: #f0f9ff; padding: 20px; border-radius: 8px; margin: 20px 0;">';
+        html += `<p><strong>Client:</strong> ${client.label || client.client_id}</p>`;
+        html += `<p><strong>Workouts deleted:</strong> ${result.workouts_deleted}</p>`;
+        html += `<p><strong>Profile metrics deleted:</strong> ${result.metrics_deleted}</p>`;
+        html += `<p><strong>Warnings deleted:</strong> ${result.warnings_deleted}</p>`;
+        html += '</div>';
+        html += '<div style="margin-top: 20px;">';
+        html += '<a href="/ui" class="btn">Back to Clients</a>';
+        html += '</div>';
+        
+        const layoutPath = path.join(__dirname, '../views/layout.html');
+        const layout = fs.readFileSync(layoutPath, 'utf8')
+            .replace('{{title}}', 'Client Deleted')
+            .replace('{{content}}', html);
+        res.send(layout);
+        
+    } catch (error) {
+        console.error('[UI] Delete client error:', error);
         res.status(500).send(`<h2>Error</h2><p>${error.message}</p>`);
     }
 });

@@ -29,9 +29,23 @@ function initializeDatabase() {
             distance_meters REAL,
             avg_heart_rate REAL,
             source_device TEXT,
+            healthkit_uuid TEXT,
             created_at TEXT NOT NULL
         )
     `);
+    
+    // Add healthkit_uuid column if it doesn't exist (migration for existing databases)
+    try {
+        db.exec(`ALTER TABLE workouts ADD COLUMN healthkit_uuid TEXT`);
+        console.log('Added healthkit_uuid column to workouts table');
+    } catch (error) {
+        // Column already exists, ignore (SQLite returns different error messages)
+        if (!error.message.includes('duplicate column name') && 
+            !error.message.includes('duplicate column')) {
+            // Only log if it's not a "column already exists" error
+            console.log('healthkit_uuid column may already exist in workouts table');
+        }
+    }
     
     // Create profile_metrics table
     db.exec(`
@@ -43,9 +57,23 @@ function initializeDatabase() {
             unit TEXT NOT NULL,
             measured_at TEXT NOT NULL,
             source TEXT NOT NULL,
+            healthkit_uuid TEXT,
             created_at TEXT NOT NULL
         )
     `);
+    
+    // Add healthkit_uuid column if it doesn't exist (migration for existing databases)
+    try {
+        db.exec(`ALTER TABLE profile_metrics ADD COLUMN healthkit_uuid TEXT`);
+        console.log('Added healthkit_uuid column to profile_metrics table');
+    } catch (error) {
+        // Column already exists, ignore (SQLite returns different error messages)
+        if (!error.message.includes('duplicate column name') && 
+            !error.message.includes('duplicate column')) {
+            // Only log if it's not a "column already exists" error
+            console.log('healthkit_uuid column may already exist in profile_metrics table');
+        }
+    }
     
     // Create clients table for pairing code management
     db.exec(`
@@ -77,9 +105,11 @@ function initializeDatabase() {
         CREATE INDEX IF NOT EXISTS idx_workouts_client_id ON workouts(client_id);
         CREATE INDEX IF NOT EXISTS idx_workouts_start_time ON workouts(start_time);
         CREATE INDEX IF NOT EXISTS idx_workouts_client_start ON workouts(client_id, start_time);
+        CREATE INDEX IF NOT EXISTS idx_workouts_uuid ON workouts(healthkit_uuid);
         CREATE INDEX IF NOT EXISTS idx_profile_metrics_client_id ON profile_metrics(client_id);
         CREATE INDEX IF NOT EXISTS idx_profile_metrics_metric ON profile_metrics(metric);
         CREATE INDEX IF NOT EXISTS idx_profile_metrics_client_measured ON profile_metrics(client_id, measured_at);
+        CREATE INDEX IF NOT EXISTS idx_profile_metrics_uuid ON profile_metrics(healthkit_uuid);
         CREATE INDEX IF NOT EXISTS idx_clients_pairing_code ON clients(pairing_code);
         CREATE INDEX IF NOT EXISTS idx_clients_client_id ON clients(client_id);
         CREATE INDEX IF NOT EXISTS idx_warnings_client_id ON warnings(client_id);

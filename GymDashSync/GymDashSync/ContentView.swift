@@ -103,6 +103,55 @@ struct ContentView: View {
                     .font(.headline)
             }
             
+            // Client ID / Pairing ID
+            if let clientId = UserDefaults.standard.string(forKey: "GymDashSync.ClientId"), !clientId.isEmpty {
+                VStack(spacing: 6) {
+                    HStack {
+                        Image(systemName: "person.circle.fill")
+                            .foregroundColor(.blue)
+                            .font(.title3)
+                        Text("Paired Device")
+                            .font(.subheadline)
+                            .fontWeight(.medium)
+                        Spacer()
+                    }
+                    
+                    HStack {
+                        Text("Client ID:")
+                            .font(.caption)
+                            .foregroundColor(.secondary)
+                        Spacer()
+                        Text(clientId)
+                            .font(.system(.caption, design: .monospaced))
+                            .foregroundColor(.primary)
+                            .padding(.horizontal, 8)
+                            .padding(.vertical, 4)
+                            .background(Color(.systemGray5))
+                            .cornerRadius(4)
+                    }
+                    .padding(.leading, 8)
+                }
+                .padding(12)
+                .background(Color.blue.opacity(0.1))
+                .cornerRadius(8)
+            } else {
+                VStack(alignment: .leading, spacing: 4) {
+                    HStack {
+                        Image(systemName: "exclamationmark.triangle.fill")
+                            .foregroundColor(.orange)
+                        Text("Not Paired")
+                            .font(.subheadline)
+                            .fontWeight(.medium)
+                    }
+                    Text("Device is not paired. Please pair your device to sync data.")
+                        .font(.caption)
+                        .foregroundColor(.secondary)
+                }
+                .padding(12)
+                .background(Color.orange.opacity(0.1))
+                .cornerRadius(8)
+            }
+            
             // Permission Denied Warning
             if !viewModel.isAuthorized && HKHealthStore.isHealthDataAvailable() {
                 VStack(alignment: .leading, spacing: 8) {
@@ -547,12 +596,39 @@ struct DebugView: View {
                             .font(.caption)
                     }
                     
-                    HStack {
-                        Text("Client ID")
-                        Spacer()
-                        Text(UserDefaults.standard.string(forKey: "GymDashSync.ClientId") ?? "Not set")
-                            .foregroundColor(.secondary)
-                            .font(.caption)
+                    if let clientId = UserDefaults.standard.string(forKey: "GymDashSync.ClientId"), !clientId.isEmpty {
+                        VStack(alignment: .leading, spacing: 8) {
+                            HStack {
+                                Text("Client ID")
+                                    .fontWeight(.medium)
+                                Spacer()
+                                Button(action: {
+                                    UIPasteboard.general.string = clientId
+                                }) {
+                                    Image(systemName: "doc.on.doc")
+                                        .foregroundColor(.blue)
+                                        .font(.caption)
+                                }
+                            }
+                            
+                            Text(clientId)
+                                .font(.system(.body, design: .monospaced))
+                                .foregroundColor(.primary)
+                                .padding(8)
+                                .frame(maxWidth: .infinity, alignment: .leading)
+                                .background(Color(.systemGray6))
+                                .cornerRadius(6)
+                                .textSelection(.enabled)
+                        }
+                        .padding(.vertical, 4)
+                    } else {
+                        HStack {
+                            Text("Client ID")
+                            Spacer()
+                            Text("Not set")
+                                .foregroundColor(.red)
+                                .font(.subheadline)
+                        }
                     }
                 }
             }

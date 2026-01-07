@@ -7,7 +7,7 @@
 
 const express = require('express');
 const router = express.Router();
-const { createClient, getAllClientsWithStats, getClientById } = require('../db/queries');
+const { createClient, getAllClientsWithStats, getClientById, deleteClient } = require('../db/queries');
 
 /**
  * Generate a human-friendly pairing code
@@ -132,6 +132,47 @@ router.get('/:client_id', (req, res) => {
         
     } catch (error) {
         console.error('[CLIENTS] Get error:', error);
+        res.status(500).json({
+            error: error.message
+        });
+    }
+});
+
+/**
+ * DELETE /clients/:client_id
+ * Delete a client and all associated data
+ */
+router.delete('/:client_id', (req, res) => {
+    try {
+        const { client_id } = req.params;
+        
+        // Verify client exists before attempting deletion
+        const client = getClientById(client_id);
+        if (!client) {
+            return res.status(404).json({
+                error: 'Client not found'
+            });
+        }
+        
+        const result = deleteClient(client_id);
+        
+        console.log(`[CLIENTS] Deleted: client_id=${client_id}, workouts=${result.workouts_deleted}, metrics=${result.metrics_deleted}, warnings=${result.warnings_deleted}`);
+        
+        res.status(200).json({
+            success: true,
+            client_id: client_id,
+            ...result
+        });
+        
+    } catch (error) {
+        console.error('[CLIENTS] Delete error:', error);
+        
+        if (error.message === 'Client not found') {
+            return res.status(404).json({
+                error: 'Client not found'
+            });
+        }
+        
         res.status(500).json({
             error: error.message
         });

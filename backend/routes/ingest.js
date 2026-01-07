@@ -12,7 +12,9 @@ const {
     insertProfileMetric, 
     clientExists,
     isDuplicateWorkout,
-    createWarning
+    createWarning,
+    deleteWorkoutsByUuids,
+    deleteProfileMetricsByUuids
 } = require('../db/queries');
 const { 
     validateWorkout, 
@@ -58,14 +60,19 @@ function handleWorkoutIngest(req, res) {
             });
         }
         
+        console.log(`[INGEST] Received workout batch with client_id=${clientId}, count=${workouts.length}`);
+        
         // Validate client_id exists
         const clientValidation = validateClientId(clientId);
         if (!clientValidation.valid) {
+            console.error(`[INGEST] Invalid client_id: ${clientId} - ${clientValidation.error}`);
             return res.status(400).json({
                 success: false,
                 error: clientValidation.error
             });
         }
+        
+        console.log(`[INGEST] Client_id validation passed: ${clientId}`);
         
         // Validate all workouts have the same client_id
         const allHaveClientId = workouts.every(w => w.client_id === clientId);
@@ -83,6 +90,9 @@ function handleWorkoutIngest(req, res) {
         let warnings = 0;
         const errorsList = [];
         
+        console.log(`[INGEST] Processing ${workouts.length} workout(s) for client_id=${clientId}`);
+        console.log(`[INGEST] First workout sample: uuid=${workouts[0]?.healthkit_uuid || 'none'}, start_time=${workouts[0]?.start_time}, client_id=${workouts[0]?.client_id}`);
+        
         for (const workout of workouts) {
             // Validate workout
             const validation = validateWorkout(workout, clientId);
@@ -94,12 +104,16 @@ function handleWorkoutIngest(req, res) {
             }
             
             // Check for duplicates first (before validation warnings)
-            if (isDuplicateWorkout(workout)) {
+            const isDup = isDuplicateWorkout(workout);
+            if (isDup) {
                 duplicates++;
+                console.log(`[INGEST] Skipping duplicate workout: uuid=${workout.healthkit_uuid || 'none'}, start_time=${workout.start_time}, client_id=${workout.client_id}`);
                 createWarning(clientId, 'workout', null, 'duplicate', 
                     `Duplicate workout skipped: start_time=${workout.start_time}, duration=${workout.duration_seconds}s`);
                 continue;
             }
+            
+            console.log(`[INGEST] Inserting new workout: uuid=${workout.healthkit_uuid || 'none'}, start_time=${workout.start_time}, client_id=${workout.client_id}`);
             
             // Track warnings count
             if (validation.warnings.length > 0) {
@@ -109,6 +123,7 @@ function handleWorkoutIngest(req, res) {
             // Insert workout
             try {
                 const result = insertWorkout(workout);
+                console.log(`[INGEST] Successfully inserted workout ID=${result.lastInsertRowid}, uuid=${workout.healthkit_uuid || 'none'}`);
                 // Store warnings with record ID after successful insert
                 if (validation.warnings.length > 0 && result.lastInsertRowid) {
                     for (const warning of validation.warnings) {
@@ -117,6 +132,7 @@ function handleWorkoutIngest(req, res) {
                 }
                 inserted++;
             } catch (error) {
+                console.error(`[INGEST] Failed to insert workout: ${error.message}, uuid=${workout.healthkit_uuid || 'none'}`);
                 errors++;
                 errorsList.push(`Failed to insert workout: ${error.message}`);
             }
@@ -287,5 +303,89 @@ router.post('/workouts', handleWorkoutIngest);
  */
 router.post('/profile', handleProfileIngest);
 router.post('/profile-metrics', handleProfileIngest);
+
+/**
+ * DELETE /workouts or DELETE /api/v1/workouts
+ * Delete workouts by UUIDs
+ */
+router.delete('/workouts', (req, res) => {
+    try {
+        const { uuids } = req.body;
+        
+        if (!Array.isArray(uuids) || uuids.length === 0) {
+            return res.status(400).json({
+                success: false,
+                error: 'Request body must contain a non-empty array of UUIDs'
+            });
+        }
+        
+        // Validate UUIDs are strings
+        if (!uuids.every(uuid => typeof uuid === 'string')) {
+            return res.status(400).json({
+                success: false,
+                error: 'All UUIDs must be strings'
+            });
+        }
+        
+        const deletedCount = deleteWorkoutsByUuids(uuids);
+        
+        console.log(`[DELETE] Workouts: deleted ${deletedCount} record(s) for ${uuids.length} UUID(s)`);
+        
+        res.status(200).json({
+            success: true,
+            count_requested: uuids.length,
+            count_deleted: deletedCount
+        });
+        
+    } catch (error) {
+        console.error('[DELETE] Workouts error:', error);
+        res.status(500).json({
+            success: false,
+            error: error.message
+        });
+    }
+});
+
+/**
+ * DELETE /profile-metrics or DELETE /api/v1/profile-metrics
+ * Delete profile metrics by UUIDs
+ */
+router.delete('/profile-metrics', (req, res) => {
+    try {
+        const { uuids } = req.body;
+        
+        if (!Array.isArray(uuids) || uuids.length === 0) {
+            return res.status(400).json({
+                success: false,
+                error: 'Request body must contain a non-empty array of UUIDs'
+            });
+        }
+        
+        // Validate UUIDs are strings
+        if (!uuids.every(uuid => typeof uuid === 'string')) {
+            return res.status(400).json({
+                success: false,
+                error: 'All UUIDs must be strings'
+            });
+        }
+        
+        const deletedCount = deleteProfileMetricsByUuids(uuids);
+        
+        console.log(`[DELETE] Profile metrics: deleted ${deletedCount} record(s) for ${uuids.length} UUID(s)`);
+        
+        res.status(200).json({
+            success: true,
+            count_requested: uuids.length,
+            count_deleted: deletedCount
+        });
+        
+    } catch (error) {
+        console.error('[DELETE] Profile metrics error:', error);
+        res.status(500).json({
+            success: false,
+            error: error.message
+        });
+    }
+});
 
 module.exports = router;

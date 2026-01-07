@@ -85,6 +85,60 @@ class SyncViewModel: ObservableObject {
         isAuthorized = syncManager.isAuthorized
     }
     
+    /// Requests all HealthKit permissions in a single authorization request
+    /// This ensures only one permission dialog is shown to the user
+    func requestAllPermissions() {
+        // Check availability first (surfaces simulator limitations)
+        guard HKHealthStore.isHealthDataAvailable() else {
+            let appError = ErrorMapper.healthKitError(
+                message: "HealthKit is not available",
+                detail: "HealthKit requires a physical iPhone. It is not available on iPad or iOS Simulator. Please test on a physical device.",
+                healthKitError: "HKHealthStore.isHealthDataAvailable() = false"
+            )
+            healthKitError = appError
+            errorHistory.add(appError)
+            return
+        }
+        
+        syncManager.requestAllPermissions { [weak self] success, error in
+            DispatchQueue.main.async {
+                // Update authorization status after permission request
+                // The syncManager uses test reads to verify actual access, which is more reliable
+                // than authorizationStatus which only checks sharing (read+write) permissions
+                self?.checkAuthorizationStatus()
+                
+                // Wait a moment for checkAuthorizationStatus to complete (it may trigger test reads)
+                DispatchQueue.main.asyncAfter(deadline: .now() + 0.6) {
+                    // Check the actual authorization state from test reads
+                    let isActuallyAuthorized = self?.syncManager.isAuthorized ?? false
+                    
+                    // Only show errors if there was a real error OR if we're actually not authorized
+                    if let error = error {
+                        let appError = ErrorMapper.healthKitError(
+                            message: "Permission request failed",
+                            detail: error.localizedDescription,
+                            healthKitError: (error as NSError).localizedDescription
+                        )
+                        self?.healthKitError = appError
+                        self?.errorHistory.add(appError)
+                    } else if !isActuallyAuthorized {
+                        // Only show denied error if we're actually not authorized (after test reads)
+                        let appError = ErrorMapper.healthKitError(
+                            message: "Permissions denied",
+                            detail: "HealthKit access was denied. To enable: Settings → Privacy & Security → Health → GymDashSync → Turn on the data types you want to share."
+                        )
+                        self?.healthKitError = appError
+                        self?.errorHistory.add(appError)
+                    } else {
+                        // Successfully authorized (verified via test reads)
+                        // Clear any previous errors
+                        self?.healthKitError = nil
+                    }
+                }
+            }
+        }
+    }
+    
     /// Requests HealthKit permissions for workout data
     ///
     /// HealthKit best practice: Always handle partial authorization.
@@ -104,10 +158,17 @@ class SyncViewModel: ObservableObject {
         
         syncManager.requestWorkoutPermissions { [weak self] success, error in
             DispatchQueue.main.async {
+                // Update authorization status after permission request
+                // The syncManager uses test reads to verify actual access, which is more reliable
+                // than authorizationStatus which only checks sharing (read+write) permissions
                 self?.checkAuthorizationStatus()
                 
-                // HealthKit may return success=true even if user denied some types
-                // This is expected - we handle partial authorization
+                // Wait a moment for checkAuthorizationStatus to complete (it may trigger test reads)
+                DispatchQueue.main.asyncAfter(deadline: .now() + 0.6) {
+                    // Check the actual authorization state from test reads
+                    let isActuallyAuthorized = self?.syncManager.isAuthorized ?? false
+                    
+                    // Only show errors if there was a real error OR if we're not actually authorized
                 if let error = error {
                     let appError = ErrorMapper.healthKitError(
                         message: "Workout permission request failed",
@@ -116,16 +177,21 @@ class SyncViewModel: ObservableObject {
                     )
                     self?.healthKitError = appError
                     self?.errorHistory.add(appError)
-                } else if !success {
-                    // User denied permissions - must reset in Settings
+                    } else if !isActuallyAuthorized {
+                        // Only show denied error if we're actually not authorized (after test reads)
+                        // Don't rely on 'success' parameter which uses authorizationStatus (checks sharing, not read)
                     let appError = ErrorMapper.healthKitError(
                         message: "Workout permission denied",
-                        detail: "User denied workout data access. To reset: Settings → Privacy & Security → Health → GymDash Sync"
+                            detail: "Workout data access was denied. To enable: Settings → Privacy & Security → Health → GymDashSync → Turn on the data types you want to share."
                     )
                     self?.healthKitError = appError
                     self?.errorHistory.add(appError)
+                    } else {
+                        // Successfully authorized (verified via test reads)
+                        // Clear any previous errors
+                        self?.healthKitError = nil
+                    }
                 }
-                // If success=true, permissions were granted (even if partial)
             }
         }
     }
@@ -149,10 +215,17 @@ class SyncViewModel: ObservableObject {
         
         syncManager.requestProfilePermissions { [weak self] success, error in
             DispatchQueue.main.async {
+                // Update authorization status after permission request
+                // The syncManager uses test reads to verify actual access, which is more reliable
+                // than authorizationStatus which only checks sharing (read+write) permissions
                 self?.checkAuthorizationStatus()
                 
-                // HealthKit may return success=true even if user denied some types
-                // This is expected - we handle partial authorization
+                // Wait a moment for checkAuthorizationStatus to complete (it may trigger test reads)
+                DispatchQueue.main.asyncAfter(deadline: .now() + 0.6) {
+                    // Check the actual authorization state from test reads
+                    let isActuallyAuthorized = self?.syncManager.isAuthorized ?? false
+                    
+                    // Only show errors if there was a real error OR if we're not actually authorized
                 if let error = error {
                     let appError = ErrorMapper.healthKitError(
                         message: "Profile permission request failed",
@@ -161,27 +234,45 @@ class SyncViewModel: ObservableObject {
                     )
                     self?.healthKitError = appError
                     self?.errorHistory.add(appError)
-                } else if !success {
-                    // User denied permissions - must reset in Settings
+                    } else if !isActuallyAuthorized {
+                        // Only show denied error if we're actually not authorized (after test reads)
+                        // Don't rely on 'success' parameter which uses authorizationStatus (checks sharing, not read)
                     let appError = ErrorMapper.healthKitError(
                         message: "Profile permission denied",
-                        detail: "User denied profile data access. To reset: Settings → Privacy & Security → Health → GymDash Sync"
+                            detail: "Profile data access was denied. To enable: Settings → Privacy & Security → Health → GymDashSync → Turn on the data types you want to share."
                     )
                     self?.healthKitError = appError
                     self?.errorHistory.add(appError)
+                    } else {
+                        // Successfully authorized (verified via test reads)
+                        // Clear any previous errors
+                        self?.healthKitError = nil
+                    }
                 }
-                // If success=true, permissions were granted (even if partial)
             }
         }
     }
     
     func syncNow() {
-        // Use BackendSyncStore directly to get detailed results
+        // Validate prerequisites before syncing
+        
+        // 1. Check for client ID (required for pairing)
         guard let clientId = UserDefaults.standard.string(forKey: "GymDashSync.ClientId"),
               !clientId.isEmpty else {
             let appError = ErrorMapper.validationError(
-                message: "No client ID found",
-                detail: "Please pair your device first"
+                message: "Cannot sync: Device not paired",
+                detail: "A client ID is required to sync data. Please pair your device first using the pairing code."
+            )
+            lastError = appError
+            errorHistory.add(appError)
+            return
+        }
+        
+        // 2. Check authorization status
+        guard isAuthorized else {
+            let appError = ErrorMapper.validationError(
+                message: "Cannot sync: HealthKit permissions not granted",
+                detail: "HealthKit permissions are required to read workout and profile data. Please authorize access in Settings → Privacy & Security → Health → GymDashSync"
             )
             lastError = appError
             errorHistory.add(appError)
@@ -207,8 +298,40 @@ class SyncViewModel: ObservableObject {
                     self?.errorHistory.add(appError)
                 } else if success {
                     // Sync results are already updated via onSyncComplete callback
-                    // If no results were captured, create a placeholder success result
-                    if self?.lastSyncResults.isEmpty ?? true {
+                    // Check if we got no data and provide helpful messaging
+                    if let results = self?.lastSyncResults {
+                        if results.isEmpty {
+                            // No sync results at all - this can happen if:
+                            // 1. No observers are configured (should be caught earlier)
+                            // 2. All objects were filtered out during conversion
+                            // 3. No new data since last sync (anchored queries return 0)
+                            print("[SyncViewModel] Sync completed with no results - this may be normal if no new data since last sync")
+                            self?.lastSyncResults = [SyncResult(
+                                success: true,
+                                timestamp: Date(),
+                                recordsReceived: 0,
+                                recordsInserted: 0
+                            )]
+                        } else {
+                            // Check if all results show 0 records
+                            let totalReceived = results.reduce(0) { $0 + $1.recordsReceived }
+                            let totalInserted = results.reduce(0) { $0 + $1.recordsInserted }
+                            let totalDuplicates = results.reduce(0) { $0 + $1.duplicatesSkipped }
+                            
+                            if totalReceived == 0 && totalInserted == 0 {
+                                // No new data was synced - this is expected with anchored queries
+                                // (HKAnchoredObjectQuery only returns data NEW since last anchor)
+                                print("[SyncViewModel] Sync completed: No new data since last sync (this is normal for incremental sync)")
+                                // Don't show this as an error - it's expected behavior
+                                // If user wants to see existing data, they need to understand incremental sync behavior
+                            } else {
+                                // We got some data - show success
+                                print("[SyncViewModel] Sync completed successfully: \(totalInserted) inserted, \(totalDuplicates) duplicates skipped")
+                            }
+                        }
+                    } else {
+                        // Fallback if results aren't set
+                        print("[SyncViewModel] Sync completed but no results available")
                         self?.lastSyncResults = [SyncResult(
                             success: true,
                             timestamp: Date(),

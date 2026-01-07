@@ -80,6 +80,9 @@ public struct ProfileMetricData: Codable {
         guard let clientId = UserDefaults.standard.string(forKey: "GymDashSync.ClientId"), !clientId.isEmpty else {
             // Expected: client_id not set means pairing hasn't completed
             // This is not an error - just means we can't sync yet
+            if DevMode.isEnabled {
+                print("[ProfileMetricData] WARNING: Cannot convert height to external object - clientId missing from UserDefaults. Sample UUID: \(sample.uuid)")
+            }
             return nil
         }
         
@@ -116,6 +119,9 @@ public struct ProfileMetricData: Codable {
         
         // Get client ID from user defaults (must be set via pairing)
         guard let clientId = UserDefaults.standard.string(forKey: "GymDashSync.ClientId"), !clientId.isEmpty else {
+            if DevMode.isEnabled {
+                print("[ProfileMetricData] WARNING: Cannot convert weight to external object - clientId missing from UserDefaults. Sample UUID: \(sample.uuid)")
+            }
             return nil
         }
         
@@ -152,6 +158,9 @@ public struct ProfileMetricData: Codable {
         
         // Get client ID from user defaults (must be set via pairing)
         guard let clientId = UserDefaults.standard.string(forKey: "GymDashSync.ClientId"), !clientId.isEmpty else {
+            if DevMode.isEnabled {
+                print("[ProfileMetricData] WARNING: Cannot convert body fat to external object - clientId missing from UserDefaults. Sample UUID: \(sample.uuid)")
+            }
             return nil
         }
         
@@ -175,6 +184,9 @@ public struct ProfileMetricData: Codable {
     
     public static func deletedMetric(uuid: UUID) -> ProfileMetricData? {
         guard let clientId = UserDefaults.standard.string(forKey: "GymDashSync.ClientId"), !clientId.isEmpty else {
+            if DevMode.isEnabled {
+                print("[ProfileMetricData] WARNING: Cannot create deleted metric object - clientId missing from UserDefaults. UUID: \(uuid)")
+            }
             return nil
         }
         return ProfileMetricData(
@@ -196,7 +208,8 @@ public struct ProfileMetricData: Codable {
             "value": value,
             "unit": unit,
             "measured_at": ISO8601DateFormatter().string(from: measuredAt),
-            "source": source
+            "source": source,
+            "healthkit_uuid": uuid.uuidString // HealthKit UUID for matching and deletion
         ]
     }
 }
