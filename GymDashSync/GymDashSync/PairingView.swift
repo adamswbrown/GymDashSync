@@ -116,8 +116,8 @@ struct PairingView: View {
             Spacer()
         }
         .padding()
-        .onChange(of: viewModel.isPaired) { isPaired in
-            if isPaired {
+        .onChange(of: viewModel.isPaired) { oldValue, newValue in
+            if newValue {
                 appState.checkClientId()
             }
         }

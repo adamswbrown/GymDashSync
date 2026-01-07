@@ -10,6 +10,19 @@ import HealthKit
 import HealthDataSync
 
 /// External object representing a profile/body metric for sync to backend
+///
+/// ARCHITECTURAL NOTES:
+/// - This is a DATA MODEL, not an identity provider
+/// - client_id comes from UserDefaults (pairing), NOT from HealthKit
+/// - HealthKit provides the metric data; we tag it with client_id
+/// - Missing metrics are expected (user may not have height/weight/body fat data)
+/// - Units are normalized (cm for height, kg for weight, percent for body fat)
+/// - Timestamps are preserved as-is from HealthKit (ISO8601)
+///
+/// HealthKit data types: HKQuantityType (height, bodyMass, bodyFatPercentage)
+/// Query method: HKAnchoredObjectQuery via HDS framework (incremental sync)
+/// Note: Characteristic types (biological sex, date of birth) are NOT used here
+///
 /// Note: This does not implement HDSExternalObjectProtocol directly.
 /// Use HeightData, WeightData, or BodyFatData wrapper types instead.
 public struct ProfileMetricData: Codable {
@@ -23,7 +36,7 @@ public struct ProfileMetricData: Codable {
     
     // Backend sync fields
     public let clientId: String
-    public let source: String = "apple_health"
+    public var source: String { "apple_health" }
     
     public init(uuid: UUID = UUID(),
                 metric: String,
@@ -49,14 +62,24 @@ public struct ProfileMetricData: Codable {
         return HKQuantityType.quantityType(forIdentifier: .height)
     }
     
+    /// Creates HeightData from HealthKit HKQuantitySample
+    ///
+    /// IMPORTANT: This method requires client_id to exist (from pairing).
+    /// If client_id is missing, returns nil - this is expected behavior.
+    /// HealthKit is a data source only; identity comes from pairing.
+    ///
+    /// Unit conversion: HealthKit stores height in meters; we convert to centimeters for backend.
     public static func heightExternalObject(object: HKObject, converter: HDSConverterProtocol?) -> HDSExternalObjectProtocol? {
         guard let sample = object as? HKQuantitySample,
               sample.quantityType == HKQuantityType.quantityType(forIdentifier: .height) else {
             return nil
         }
         
-        // Get client ID from user defaults (must be set via pairing)
+        // Identity comes from pairing, NOT from HealthKit
+        // If client_id is missing, we cannot sync (pairing required)
         guard let clientId = UserDefaults.standard.string(forKey: "GymDashSync.ClientId"), !clientId.isEmpty else {
+            // Expected: client_id not set means pairing hasn't completed
+            // This is not an error - just means we can't sync yet
             return nil
         }
         
@@ -96,6 +119,8 @@ public struct ProfileMetricData: Codable {
             return nil
         }
         
+        // HealthKit stores weight in grams; we normalize to kilograms for backend
+        // Unit conversion: HKUnit.gramUnit(with: .kilo) = kg
         let value = sample.quantity.doubleValue(for: HKUnit.gramUnit(with: .kilo))
         
         let metricData = ProfileMetricData(
@@ -103,7 +128,7 @@ public struct ProfileMetricData: Codable {
             metric: "weight",
             value: value,
             unit: "kg",
-            measuredAt: sample.startDate,
+            measuredAt: sample.startDate, // Timestamp preserved as-is from HealthKit
             clientId: clientId
         )
         return WeightData(metric: metricData)
@@ -130,6 +155,9 @@ public struct ProfileMetricData: Codable {
             return nil
         }
         
+        // HealthKit stores body fat as percentage (0.0-1.0 range)
+        // We preserve the percentage value as-is (no conversion needed)
+        // Unit conversion: HKUnit.percent() returns 0.0-1.0, we store as percentage value
         let value = sample.quantity.doubleValue(for: HKUnit.percent())
         
         let metricData = ProfileMetricData(
@@ -137,7 +165,7 @@ public struct ProfileMetricData: Codable {
             metric: "body_fat",
             value: value,
             unit: "percent",
-            measuredAt: sample.startDate,
+            measuredAt: sample.startDate, // Timestamp preserved as-is from HealthKit
             clientId: clientId
         )
         return BodyFatData(metric: metricData)
@@ -243,15 +271,15 @@ public struct WeightData: HDSExternalObjectProtocol {
     
     public func update(with object: HKObject) {
         // Update is handled by creating a new ProfileMetricData from the HKObject
-        if let updatedData = ProfileMetricData.weightExternalObject(object: object, converter: nil) as? ProfileMetricData {
             // Framework will handle replacing the instance
-        }
+        _ = ProfileMetricData.weightExternalObject(object: object, converter: nil)
     }
     
     public mutating func updateMetric(with object: HKObject) {
-        if let updatedData = ProfileMetricData.weightExternalObject(object: object, converter: nil) as? ProfileMetricData {
-            self.metric = updatedData
-            self.uuid = updatedData.uuid
+        if let result = ProfileMetricData.weightExternalObject(object: object, converter: nil),
+           let weightData = result as? WeightData {
+            self.metric = weightData.toProfileMetric()
+            self.uuid = weightData.uuid
         }
     }
     
@@ -290,15 +318,15 @@ public struct BodyFatData: HDSExternalObjectProtocol {
     
     public func update(with object: HKObject) {
         // Update is handled by creating a new ProfileMetricData from the HKObject
-        if let updatedData = ProfileMetricData.bodyFatExternalObject(object: object, converter: nil) as? ProfileMetricData {
             // Framework will handle replacing the instance
-        }
+        _ = ProfileMetricData.bodyFatExternalObject(object: object, converter: nil)
     }
     
     public mutating func updateMetric(with object: HKObject) {
-        if let updatedData = ProfileMetricData.bodyFatExternalObject(object: object, converter: nil) as? ProfileMetricData {
-            self.metric = updatedData
-            self.uuid = updatedData.uuid
+        if let result = ProfileMetricData.bodyFatExternalObject(object: object, converter: nil),
+           let bodyFatData = result as? BodyFatData {
+            self.metric = bodyFatData.toProfileMetric()
+            self.uuid = bodyFatData.uuid
         }
     }
     

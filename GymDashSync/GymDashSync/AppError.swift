@@ -90,7 +90,7 @@ public enum ErrorCategory: String, Codable {
 }
 
 /// Additional context for errors
-public struct ErrorContext: Codable, Equatable {
+public struct ErrorContext: Codable, @unchecked Sendable {
     public let endpoint: String?
     public let statusCode: Int?
     public let responseBody: String?
@@ -109,6 +109,16 @@ public struct ErrorContext: Codable, Equatable {
         self.responseBody = responseBody
         self.healthKitError = healthKitError
         self.requestDuration = requestDuration
+    }
+}
+
+extension ErrorContext: Equatable {
+    public static func == (lhs: ErrorContext, rhs: ErrorContext) -> Bool {
+        return lhs.endpoint == rhs.endpoint &&
+               lhs.statusCode == rhs.statusCode &&
+               lhs.responseBody == rhs.responseBody &&
+               lhs.healthKitError == rhs.healthKitError &&
+               lhs.requestDuration == rhs.requestDuration
     }
 }
 

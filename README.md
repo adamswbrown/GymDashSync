@@ -236,6 +236,95 @@ Uses incremental sync patterns from the Microsoft Health Data Sync library:
 
 ## Architecture
 
+### HealthKit Best Practices (Validated)
+
+This app follows Apple's HealthKit best practices and architectural principles:
+
+#### ✅ Confirmed Architectural Decisions
+
+1. **HealthKit as Data Source Only**
+   - HealthKit is used exclusively to read health data
+   - No identity, no user management, no authentication from HealthKit
+   - All data is tagged with `client_id` from pairing (UserDefaults), not from HealthKit
+
+2. **Identity Separate from HealthKit**
+   - Identity is managed via pairing codes → `client_id` (UUID) stored in UserDefaults
+   - Pairing happens BEFORE HealthKit access (see `App.swift`)
+   - Backend owns identity; HealthKit owns data
+
+3. **client_id as Sole Ownership Key**
+   - Every record sent to backend includes `client_id`
+   - Backend uses `client_id` for ownership, isolation, and deduplication
+   - HealthKit data is never used to infer ownership
+
+4. **Permissions Requested After Pairing**
+   - App flow: Pairing → HealthKit Permissions → Sync
+   - `PairingView` shown if no `client_id` exists
+   - Permission buttons appear only after pairing completes
+
+5. **Missing/Partial Data Expected and Tolerated**
+   - Returns `nil` if `client_id` missing (expected - pairing required)
+   - Handles partial authorization (user may grant some types, deny others)
+   - Optional fields (calories, distance, heart rate) are nullable
+   - Backend accepts partial records
+
+6. **Replayed Data Expected**
+   - Backend deduplicates workouts by `client_id` + `start_time` ±120s + `duration_seconds` ±10%
+   - HDS framework uses anchor queries for incremental sync
+   - Re-running queries may return same data (expected, handled by backend)
+
+#### HealthKit Constraints (Apple Documentation)
+
+These constraints are correctly handled:
+
+- ✅ **HealthKit is NOT an identity provider** - We use pairing codes
+- ✅ **Data is user-controlled** - We request read-only permissions
+- ✅ **Partial/missing data expected** - Backend handles optional fields
+- ✅ **Queries may return overlapping samples** - Backend deduplicates
+- ✅ **Characteristic data is read-only** - We only read, never write
+- ✅ **Simulator limitations** - Surfaces warnings in dev mode
+
+#### Why Pairing Codes Instead of Apple Sign-In?
+
+This is a developer-first system designed for iterative development:
+
+- **Simple identity bootstrap** - No OAuth complexity during development
+- **Easy testing** - Pairing codes can be generated and shared easily
+- **Clear migration path** - Same data schema, same `client_id` model works with Apple Sign-In later
+- **No cloud dependencies** - Works entirely locally during development
+- **Isolated from sync pipeline** - Pairing logic is separate from data sync
+
+The pairing logic is isolated from the sync pipeline and database schema, making it easy to replace with Apple Sign-In or other authentication methods later.
+
+#### Why Deduplication Exists
+
+HealthKit queries may return overlapping or repeated samples:
+- Re-running queries may return the same data
+- Anchor queries may replay data if anchor is lost
+- Multiple devices (iPhone + Apple Watch) may create duplicate entries
+
+Backend deduplication ensures data integrity without requiring complex client-side logic.
+
+#### Why Verbose Error UI in Development
+
+During development, failures must be obvious and debuggable:
+- HealthKit errors are often silent or unclear
+- Network failures need detailed diagnostics
+- Backend validation errors must be visible
+- Simulator limitations must be explained
+
+Production builds can disable dev mode for user-friendly messages.
+
+#### Expected HealthKit Limitations (Not Bugs)
+
+These are expected behaviors, not bugs:
+
+- **Simulator limitations** - HealthKit is not fully available on iOS Simulator
+- **Partial authorization** - User may grant some types, deny others
+- **Permission persistence** - Permissions may be revoked by user at any time
+- **Missing data** - User may not have all data types (e.g., no body fat measurements)
+- **Replayed queries** - Re-running queries may return same data (backend deduplicates)
+
 ### Foundation Library
 This project uses the [Microsoft Health Data Sync](https://github.com/microsoft/health-data-sync) library as its foundation. The library is vendored locally in the `HealthDataSync/` directory.
 

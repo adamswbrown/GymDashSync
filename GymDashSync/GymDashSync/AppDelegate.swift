@@ -23,5 +23,15 @@ class AppDelegate: NSObject, UIApplicationDelegate {
         
         return true
     }
+    
+    /// Called when app becomes active (e.g., returning from Settings)
+    /// Re-check HealthKit authorization status in case user changed permissions
+    func applicationDidBecomeActive(_ application: UIApplication) {
+        print("[AppDelegate] App became active - re-checking HealthKit authorization status")
+        syncManager?.checkAuthorizationStatus()
+        
+        // Post notification so views can update
+        NotificationCenter.default.post(name: NSNotification.Name("HealthKitAuthorizationStatusChanged"), object: nil)
+    }
 }
 

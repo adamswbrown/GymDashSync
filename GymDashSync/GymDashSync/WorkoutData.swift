@@ -10,6 +10,17 @@ import HealthKit
 import HealthDataSync
 
 /// External object representing a workout for sync to backend
+///
+/// ARCHITECTURAL NOTES:
+/// - This is a DATA MODEL, not an identity provider
+/// - client_id comes from UserDefaults (pairing), NOT from HealthKit
+/// - HealthKit provides the workout data; we tag it with client_id
+/// - Missing optional fields (calories, distance, heart rate) are expected and tolerated
+/// - Timestamps are preserved as-is from HealthKit (ISO8601)
+/// - Units are normalized before sending to backend (seconds, meters, kcal)
+///
+/// HealthKit data type: HKWorkout (not HKQuantitySample)
+/// Query method: HKAnchoredObjectQuery via HDS framework (incremental sync)
 public struct WorkoutData: HDSExternalObjectProtocol, Codable {
     public var uuid: UUID
     
@@ -27,7 +38,7 @@ public struct WorkoutData: HDSExternalObjectProtocol, Codable {
     
     // Backend sync fields
     public let clientId: String
-    public let source: String = "apple_health"
+    public var source: String { "apple_health" }
     
     public init(uuid: UUID = UUID(),
                 workoutType: String,
@@ -67,14 +78,24 @@ public struct WorkoutData: HDSExternalObjectProtocol, Codable {
         return HKObjectType.workoutType()
     }
     
+    /// Creates WorkoutData from HealthKit HKWorkout object
+    ///
+    /// IMPORTANT: This method requires client_id to exist (from pairing).
+    /// If client_id is missing, returns nil - this is expected behavior.
+    /// HealthKit is a data source only; identity comes from pairing.
+    ///
+    /// HealthKit best practice: Always handle nil returns gracefully.
+    /// Missing client_id is not an error - it means pairing hasn't completed yet.
     public static func externalObject(object: HKObject, converter: HDSConverterProtocol?) -> HDSExternalObjectProtocol? {
         guard let workout = object as? HKWorkout else {
             return nil
         }
         
-        // Get client ID from user defaults (must be set via pairing)
+        // Identity comes from pairing, NOT from HealthKit
+        // If client_id is missing, we cannot sync (pairing required)
         guard let clientId = UserDefaults.standard.string(forKey: "GymDashSync.ClientId"), !clientId.isEmpty else {
-            // Client ID not set - pairing required
+            // Expected: client_id not set means pairing hasn't completed
+            // This is not an error - just means we can't sync yet
             return nil
         }
         
@@ -87,9 +108,14 @@ public struct WorkoutData: HDSExternalObjectProtocol, Codable {
         // Extract metrics from workout
         var activeEnergy: Double? = nil
         var distance: Double? = nil
-        var avgHeartRate: Double? = nil
+        let avgHeartRate: Double? = nil
         
         // Active energy burned
+        // Note: totalEnergyBurned is deprecated in iOS 18.0, but it's still the correct API
+        // for accessing energy from an HKWorkout object. The new statistics API requires
+        // querying the health store separately, which is more complex.
+        // We intentionally use the deprecated API for simplicity and compatibility.
+        // This generates a deprecation warning but the code is correct and functional.
         if let energy = workout.totalEnergyBurned {
             activeEnergy = energy.doubleValue(for: HKUnit.kilocalorie())
         }
@@ -138,17 +164,10 @@ public struct WorkoutData: HDSExternalObjectProtocol, Codable {
     }
     
     public func update(with object: HKObject) {
-        guard let workout = object as? HKWorkout else {
-            return
-        }
-        
-        // Update mutable properties from the HealthKit object
-        // Note: Since WorkoutData uses let for most properties, we create a new instance
+        // Update is handled by creating a new WorkoutData from the HKObject
         // The framework will handle replacing the old instance with the updated one
-        // For now, we'll update what we can (though workouts are typically immutable in HealthKit)
-        
-        // If the workout UUID matches, we can update metrics that might have changed
-        // This is rare for workouts, but the framework supports it
+        // Workouts are typically immutable in HealthKit, so this is mainly for framework compatibility
+        _ = object as? HKWorkout
     }
     
     // MARK: - Helper Methods
@@ -172,14 +191,22 @@ public struct WorkoutData: HDSExternalObjectProtocol, Codable {
     
     // MARK: - Backend Payload
     
+    /// Converts WorkoutData to backend payload format
+    ///
+    /// HealthKit best practice: Timestamps are preserved as-is from HealthKit (no timezone conversion).
+    /// Units are normalized: seconds (duration), meters (distance), kcal (calories).
+    /// client_id comes from pairing (UserDefaults), not from HealthKit.
     public func toBackendPayload() -> [String: Any] {
+        // Backend payload with normalized units and ISO8601 timestamps
+        // Timestamps are preserved as-is from HealthKit (no timezone conversion)
+        // Units: seconds (duration), meters (distance), kcal (calories)
         var payload: [String: Any] = [
-            "client_id": clientId,
+            "client_id": clientId, // From pairing, not HealthKit
             "source": source,
             "workout_type": workoutType,
-            "start_time": ISO8601DateFormatter().string(from: startTime),
-            "end_time": ISO8601DateFormatter().string(from: endTime),
-            "duration_seconds": durationSeconds
+            "start_time": ISO8601DateFormatter().string(from: startTime), // Preserved from HealthKit
+            "end_time": ISO8601DateFormatter().string(from: endTime), // Preserved from HealthKit
+            "duration_seconds": durationSeconds // Calculated from start/end times
         ]
         
         if let calories = activeEnergyBurned {

@@ -6,6 +6,7 @@
 //  Licensed under the MIT License.
 
 import SwiftUI
+import HealthKit
 
 struct ContentView: View {
     @StateObject private var viewModel = SyncViewModel()
@@ -73,6 +74,25 @@ struct ContentView: View {
     
     private var statusSection: some View {
         VStack(spacing: 16) {
+            // HealthKit Availability Warning (dev mode)
+            if DevMode.isEnabled && !HKHealthStore.isHealthDataAvailable() {
+                VStack(alignment: .leading, spacing: 4) {
+                    HStack {
+                        Image(systemName: "exclamationmark.triangle.fill")
+                            .foregroundColor(.orange)
+                        Text("HealthKit Not Available")
+                            .font(.caption)
+                            .fontWeight(.semibold)
+                    }
+                    Text("HealthKit requires a physical iPhone. It is not available on iPad or iOS Simulator.")
+                        .font(.caption2)
+                        .foregroundColor(.secondary)
+                }
+                .padding(8)
+                .background(Color.orange.opacity(0.1))
+                .cornerRadius(6)
+            }
+            
             // Authorization Status
             HStack {
                 Image(systemName: viewModel.isAuthorized ? "checkmark.circle.fill" : "xmark.circle.fill")
@@ -81,6 +101,46 @@ struct ContentView: View {
                 
                 Text(viewModel.isAuthorized ? "Authorized" : "Not Authorized")
                     .font(.headline)
+            }
+            
+            // Permission Denied Warning
+            if !viewModel.isAuthorized && HKHealthStore.isHealthDataAvailable() {
+                VStack(alignment: .leading, spacing: 8) {
+                    HStack {
+                        Image(systemName: "exclamationmark.triangle.fill")
+                            .foregroundColor(.orange)
+                        Text("Permissions Denied")
+                            .font(.caption)
+                            .fontWeight(.semibold)
+                    }
+                    
+                    Text("HealthKit permissions were previously denied. iOS won't show the permission dialog again.")
+                        .font(.caption2)
+                        .foregroundColor(.secondary)
+                    
+                    VStack(alignment: .leading, spacing: 4) {
+                        Text("To reset permissions:")
+                            .font(.caption2)
+                            .fontWeight(.medium)
+                            .foregroundColor(.secondary)
+                        Text("1. Open Settings")
+                            .font(.caption2)
+                            .foregroundColor(.secondary)
+                        Text("2. Go to Privacy & Security → Health")
+                            .font(.caption2)
+                            .foregroundColor(.secondary)
+                        Text("3. Select GymDashSync")
+                            .font(.caption2)
+                            .foregroundColor(.secondary)
+                        Text("4. Enable the data types you want to share")
+                            .font(.caption2)
+                            .foregroundColor(.secondary)
+                    }
+                    .padding(.leading, 8)
+                }
+                .padding(12)
+                .background(Color.orange.opacity(0.1))
+                .cornerRadius(8)
             }
             
             // Last Sync
@@ -96,6 +156,21 @@ struct ContentView: View {
                 Text("No sync yet")
                     .font(.subheadline)
                     .foregroundColor(.secondary)
+            }
+            
+            // Refresh Status Button (if not authorized)
+            if !viewModel.isAuthorized && HKHealthStore.isHealthDataAvailable() {
+                Button(action: {
+                    viewModel.checkAuthorizationStatus()
+                }) {
+                    HStack {
+                        Image(systemName: "arrow.clockwise")
+                        Text("Refresh Status")
+                    }
+                    .font(.caption)
+                    .foregroundColor(.blue)
+                }
+                .padding(.top, 4)
             }
             
             // Syncing Indicator
@@ -418,6 +493,22 @@ struct DebugView: View {
                             get: { DevMode.isEnabled },
                             set: { DevMode.setEnabled($0) }
                         ))
+                    }
+                }
+                
+                Section(header: Text("Permissions")) {
+                    Button(action: {
+                        viewModel.requestWorkoutPermissions()
+                    }) {
+                        Text("Request Workout Permissions")
+                            .foregroundColor(.blue)
+                    }
+                    
+                    Button(action: {
+                        viewModel.requestProfilePermissions()
+                    }) {
+                        Text("Request Profile Permissions")
+                            .foregroundColor(.blue)
                     }
                 }
                 

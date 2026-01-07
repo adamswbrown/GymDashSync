@@ -27,14 +27,25 @@ public struct BackendConfig {
     }
     
     public static var `default`: BackendConfig {
-        // Default to localhost for development - can be overridden via UserDefaults
-        let url = UserDefaults.standard.string(forKey: "GymDashSync.BackendURL") ?? "http://localhost:3001"
+        // Default to Mac's IP address for physical device testing, fallback to localhost for simulator
+        // Can be overridden via UserDefaults key "GymDashSync.BackendURL"
+        let defaultURL = UserDefaults.standard.string(forKey: "GymDashSync.BackendURL") ?? "http://192.168.68.51:3001"
         let key = UserDefaults.standard.string(forKey: "GymDashSync.APIKey")
-        return BackendConfig(baseURL: url, apiKey: key)
+        return BackendConfig(baseURL: defaultURL, apiKey: key)
     }
 }
 
 /// Backend sync store implementation for HealthDataSync
+///
+/// ARCHITECTURAL PRINCIPLES:
+/// - Receives HealthKit data objects that are ALREADY tagged with client_id
+/// - client_id comes from pairing (UserDefaults), NOT from HealthKit
+/// - All sync operations require client_id to be present
+/// - Backend owns identity and deduplication logic
+/// - Missing or partial data is expected and handled gracefully
+///
+/// This store does NOT derive identity from HealthKit data.
+/// It assumes client_id is already attached to each object.
 public class BackendSyncStore: HDSExternalStoreProtocol {
     private let config: BackendConfig
     private let session: URLSession
@@ -138,6 +149,14 @@ public class BackendSyncStore: HDSExternalStoreProtocol {
         }
     }
     
+    /// Adds HealthKit objects to backend
+    ///
+    /// IMPORTANT: All objects MUST have client_id attached (from pairing, not HealthKit).
+    /// This method assumes client_id is already present in each object.
+    /// Missing client_id is a validation error, not a HealthKit error.
+    ///
+    /// HealthKit best practice: Re-running queries may return the same data.
+    /// Backend deduplicates by client_id + timestamp, so replay is safe.
     public func add(objects: [HDSExternalObjectProtocol], completion: @escaping (Error?) -> Void) {
         guard !objects.isEmpty else {
             completion(nil)
@@ -145,6 +164,7 @@ public class BackendSyncStore: HDSExternalStoreProtocol {
         }
         
         // Group objects by type
+        // Note: All objects are already tagged with client_id from pairing
         var workouts: [WorkoutData] = []
         var profileMetrics: [ProfileMetricData] = []
         

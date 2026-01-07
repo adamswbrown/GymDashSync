@@ -65,6 +65,19 @@ class SyncViewModel: ObservableObject {
         
         // Start observing for changes
         syncManager.startObserving()
+        
+        // Listen for app becoming active (user may have changed permissions in Settings)
+        // Also listen for authorization status changes from test reads
+        NotificationCenter.default.addObserver(
+            forName: NSNotification.Name("HealthKitAuthorizationStatusChanged"),
+            object: nil,
+            queue: .main
+        ) { [weak self] _ in
+            print("[SyncViewModel] Received HealthKitAuthorizationStatusChanged notification - reading updated status")
+            // Read the updated value directly (notification is posted AFTER isAuthorized is updated)
+            // Don't call checkAuthorizationStatus() again as it would trigger another test read
+            self?.isAuthorized = self?.syncManager.isAuthorized ?? false
+        }
     }
     
     func checkAuthorizationStatus() {
@@ -72,50 +85,92 @@ class SyncViewModel: ObservableObject {
         isAuthorized = syncManager.isAuthorized
     }
     
+    /// Requests HealthKit permissions for workout data
+    ///
+    /// HealthKit best practice: Always handle partial authorization.
+    /// User may grant some types and deny others - this is expected and acceptable.
     func requestWorkoutPermissions() {
+        // Check availability first (surfaces simulator limitations)
+        guard HKHealthStore.isHealthDataAvailable() else {
+            let appError = ErrorMapper.healthKitError(
+                message: "HealthKit is not available",
+                detail: "HealthKit requires a physical iPhone. It is not available on iPad or iOS Simulator. Please test on a physical device.",
+                healthKitError: "HKHealthStore.isHealthDataAvailable() = false"
+            )
+            healthKitError = appError
+            errorHistory.add(appError)
+            return
+        }
+        
         syncManager.requestWorkoutPermissions { [weak self] success, error in
             DispatchQueue.main.async {
                 self?.checkAuthorizationStatus()
+                
+                // HealthKit may return success=true even if user denied some types
+                // This is expected - we handle partial authorization
                 if let error = error {
                     let appError = ErrorMapper.healthKitError(
-                        message: "Workout permission denied",
+                        message: "Workout permission request failed",
                         detail: error.localizedDescription,
                         healthKitError: (error as NSError).localizedDescription
                     )
                     self?.healthKitError = appError
                     self?.errorHistory.add(appError)
                 } else if !success {
+                    // User denied permissions - must reset in Settings
                     let appError = ErrorMapper.healthKitError(
                         message: "Workout permission denied",
-                        detail: "User denied workout data access"
+                        detail: "User denied workout data access. To reset: Settings → Privacy & Security → Health → GymDash Sync"
                     )
                     self?.healthKitError = appError
                     self?.errorHistory.add(appError)
                 }
+                // If success=true, permissions were granted (even if partial)
             }
         }
     }
     
+    /// Requests HealthKit permissions for profile metrics (height, weight, body fat)
+    ///
+    /// HealthKit best practice: Always handle partial authorization.
+    /// User may grant some types and deny others - this is expected and acceptable.
     func requestProfilePermissions() {
+        // Check availability first (surfaces simulator limitations)
+        guard HKHealthStore.isHealthDataAvailable() else {
+            let appError = ErrorMapper.healthKitError(
+                message: "HealthKit is not available",
+                detail: "HealthKit requires a physical iPhone. It is not available on iPad or iOS Simulator. Please test on a physical device.",
+                healthKitError: "HKHealthStore.isHealthDataAvailable() = false"
+            )
+            healthKitError = appError
+            errorHistory.add(appError)
+            return
+        }
+        
         syncManager.requestProfilePermissions { [weak self] success, error in
             DispatchQueue.main.async {
                 self?.checkAuthorizationStatus()
+                
+                // HealthKit may return success=true even if user denied some types
+                // This is expected - we handle partial authorization
                 if let error = error {
                     let appError = ErrorMapper.healthKitError(
-                        message: "Profile permission denied",
+                        message: "Profile permission request failed",
                         detail: error.localizedDescription,
                         healthKitError: (error as NSError).localizedDescription
                     )
                     self?.healthKitError = appError
                     self?.errorHistory.add(appError)
                 } else if !success {
+                    // User denied permissions - must reset in Settings
                     let appError = ErrorMapper.healthKitError(
                         message: "Profile permission denied",
-                        detail: "User denied profile data access"
+                        detail: "User denied profile data access. To reset: Settings → Privacy & Security → Health → GymDash Sync"
                     )
                     self?.healthKitError = appError
                     self?.errorHistory.add(appError)
                 }
+                // If success=true, permissions were granted (even if partial)
             }
         }
     }
