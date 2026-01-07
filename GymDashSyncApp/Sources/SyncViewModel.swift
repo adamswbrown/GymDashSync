@@ -151,13 +151,16 @@ class SyncViewModel: ObservableObject {
                     self?.lastError = appError
                     self?.errorHistory.add(appError)
                 } else if success {
-                    // Create a success result (simplified - in production, get actual counts from sync)
-                    self?.lastSyncResult = SyncResult(
-                        success: true,
-                        timestamp: Date(),
-                        recordsReceived: 0,
-                        recordsInserted: 0
-                    )
+                    // Sync results are already updated via onSyncComplete callback
+                    // If no results were captured, create a placeholder success result
+                    if self?.lastSyncResults.isEmpty ?? true {
+                        self?.lastSyncResults = [SyncResult(
+                            success: true,
+                            timestamp: Date(),
+                            recordsReceived: 0,
+                            recordsInserted: 0
+                        )]
+                    }
                 }
             }
         }

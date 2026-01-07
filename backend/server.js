@@ -10,7 +10,7 @@ const { initializeDatabase } = require('./db/init');
 
 // Initialize Express app
 const app = express();
-const PORT = 3000;
+const PORT = process.env.PORT || 3001;
 
 // Middleware
 app.use(express.json());

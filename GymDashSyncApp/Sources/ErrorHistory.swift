@@ -59,3 +59,10 @@ public class ErrorHistory: ObservableObject {
     }
 }
 
+// MARK: - ErrorHistory Singleton
+
+extension ErrorHistory {
+    /// Shared singleton instance for app-wide error history
+    public static let shared = ErrorHistory()
+}
+

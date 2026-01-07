@@ -27,8 +27,8 @@ public struct BackendConfig {
     }
     
     public static var `default`: BackendConfig {
-        // Default to placeholder - should be configured via app settings
-        let url = UserDefaults.standard.string(forKey: "GymDashSync.BackendURL") ?? "https://api.example.com"
+        // Default to localhost for development - can be overridden via UserDefaults
+        let url = UserDefaults.standard.string(forKey: "GymDashSync.BackendURL") ?? "http://localhost:3001"
         let key = UserDefaults.standard.string(forKey: "GymDashSync.APIKey")
         return BackendConfig(baseURL: url, apiKey: key)
     }

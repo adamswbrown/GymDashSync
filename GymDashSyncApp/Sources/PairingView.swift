@@ -283,11 +283,6 @@ class PairingViewModel: ObservableObject {
     }
 }
 
-// MARK: - ErrorHistory Singleton
-
-extension ErrorHistory {
-    static let shared = ErrorHistory()
-}
 
 struct PairingView_Previews: PreviewProvider {
     static var previews: some View {
