@@ -243,7 +243,7 @@ struct ContentView: View {
                 }
             }
             
-                    if showDiagnostics {
+            if showDiagnostics {
                 if !viewModel.lastSyncResults.isEmpty {
                     ForEach(Array(viewModel.lastSyncResults.enumerated()), id: \.offset) { index, result in
                         VStack(alignment: .leading, spacing: 8) {
@@ -256,108 +256,108 @@ struct ContentView: View {
                             
                             Text("Last Sync Summary")
                                 .font(.headline)
-                        
-                        HStack {
-                            Text("Status:")
-                            Spacer()
-                            Text(result.success ? "Success" : "Failed")
-                                .foregroundColor(result.success ? .green : .red)
-                        }
-                        
-                        if let endpoint = result.endpoint {
+                            
                             HStack {
-                                Text("Endpoint:")
+                                Text("Status:")
                                 Spacer()
-                                Text(endpoint)
-                                    .font(.caption)
+                                Text(result.success ? "Success" : "Failed")
+                                    .foregroundColor(result.success ? .green : .red)
+                            }
+                            
+                            if let endpoint = result.endpoint {
+                                HStack {
+                                    Text("Endpoint:")
+                                    Spacer()
+                                    Text(endpoint)
+                                        .font(.caption)
+                                        .foregroundColor(.secondary)
+                                }
+                            }
+                            
+                            if let statusCode = result.statusCode {
+                                HStack {
+                                    Text("Status Code:")
+                                    Spacer()
+                                    Text("\(statusCode)")
+                                        .foregroundColor(.secondary)
+                                }
+                            }
+                            
+                            HStack {
+                                Text("Duration:")
+                                Spacer()
+                                Text(String(format: "%.2fs", result.duration))
                                     .foregroundColor(.secondary)
                             }
-                        }
-                        
-                        if let statusCode = result.statusCode {
-                            HStack {
-                                Text("Status Code:")
-                                Spacer()
-                                Text("\(statusCode)")
-                                    .foregroundColor(.secondary)
-                            }
-                        }
-                        
-                        HStack {
-                            Text("Duration:")
-                            Spacer()
-                            Text(String(format: "%.2fs", result.duration))
-                                .foregroundColor(.secondary)
-                        }
-                        
-                        Divider()
-                        
-                        Text("Record Counts")
-                            .font(.subheadline)
-                            .fontWeight(.semibold)
-                        
-                        HStack {
-                            Text("Received:")
-                            Spacer()
-                            Text("\(result.recordsReceived)")
-                                .foregroundColor(.secondary)
-                        }
-                        
-                        HStack {
-                            Text("Inserted:")
-                            Spacer()
-                            Text("\(result.recordsInserted)")
-                                .foregroundColor(.green)
-                        }
-                        
-                        if result.duplicatesSkipped > 0 {
-                            HStack {
-                                Text("Duplicates Skipped:")
-                                Spacer()
-                                Text("\(result.duplicatesSkipped)")
-                                    .foregroundColor(.orange)
-                            }
-                        }
-                        
-                        if result.warningsCount > 0 {
-                            HStack {
-                                Text("Warnings:")
-                                Spacer()
-                                Text("\(result.warningsCount)")
-                                    .foregroundColor(.orange)
-                            }
-                        }
-                        
-                        if result.errorsCount > 0 {
-                            HStack {
-                                Text("Errors:")
-                                Spacer()
-                                Text("\(result.errorsCount)")
-                                    .foregroundColor(.red)
-                            }
-                        }
-                        
-                        if let validationErrors = result.validationErrors, !validationErrors.isEmpty {
+                            
                             Divider()
-                            Text("Validation Errors:")
+                            
+                            Text("Record Counts")
                                 .font(.subheadline)
                                 .fontWeight(.semibold)
-                            ForEach(validationErrors, id: \.self) { error in
-                                Text("• \(error)")
-                                    .font(.caption)
-                                    .foregroundColor(.red)
+                            
+                            HStack {
+                                Text("Received:")
+                                Spacer()
+                                Text("\(result.recordsReceived)")
+                                    .foregroundColor(.secondary)
                             }
-                        }
-                        
-                        if DevMode.isEnabled {
-                            Divider()
-                            Text(result.diagnostics)
-                                .font(.system(.caption, design: .monospaced))
-                                .foregroundColor(.secondary)
-                                .padding(8)
-                                .background(Color(.systemGray6))
-                                .cornerRadius(6)
-                        }
+                            
+                            HStack {
+                                Text("Inserted:")
+                                Spacer()
+                                Text("\(result.recordsInserted)")
+                                    .foregroundColor(.green)
+                            }
+                            
+                            if result.duplicatesSkipped > 0 {
+                                HStack {
+                                    Text("Duplicates Skipped:")
+                                    Spacer()
+                                    Text("\(result.duplicatesSkipped)")
+                                        .foregroundColor(.orange)
+                                }
+                            }
+                            
+                            if result.warningsCount > 0 {
+                                HStack {
+                                    Text("Warnings:")
+                                    Spacer()
+                                    Text("\(result.warningsCount)")
+                                        .foregroundColor(.orange)
+                                }
+                            }
+                            
+                            if result.errorsCount > 0 {
+                                HStack {
+                                    Text("Errors:")
+                                    Spacer()
+                                    Text("\(result.errorsCount)")
+                                        .foregroundColor(.red)
+                                }
+                            }
+                            
+                            if let validationErrors = result.validationErrors, !validationErrors.isEmpty {
+                                Divider()
+                                Text("Validation Errors:")
+                                    .font(.subheadline)
+                                    .fontWeight(.semibold)
+                                ForEach(validationErrors, id: \.self) { error in
+                                    Text("• \(error)")
+                                        .font(.caption)
+                                        .foregroundColor(.red)
+                                }
+                            }
+                            
+                            if DevMode.isEnabled {
+                                Divider()
+                                Text(result.diagnostics)
+                                    .font(.system(.caption, design: .monospaced))
+                                    .foregroundColor(.secondary)
+                                    .padding(8)
+                                    .background(Color(.systemGray6))
+                                    .cornerRadius(6)
+                            }
                         }
                         .padding()
                         .background(Color(.systemGray6))
@@ -369,7 +369,6 @@ struct ContentView: View {
                         .foregroundColor(.secondary)
                         .padding()
                 }
-            }
             }
         }
         .padding()

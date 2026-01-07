@@ -4,5 +4,7 @@
 			"path": "."
 		}
 	],
-	"settings": {}
+	"settings": {
+		"sweetpad.build.xcodeWorkspacePath": "GymDashSync/GymDashSync.xcodeproj/project.xcworkspace"
+	}
 }
