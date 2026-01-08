@@ -81,7 +81,10 @@ router.get('/', asyncHandler(async (req, res) => {
     const clients = await getAllClientsWithStats();
     
     let html = '<h2>Clients</h2>';
-    html += '<a href="/ui/clients/new" class="btn">Create New Client</a>';
+    html += '<div style="margin-bottom: 20px;">';
+    html += '<a href="/ui/clients/new" class="btn">Create New Client</a> ';
+    html += '<a href="/ui/diagnostics/schema" class="btn" style="background-color: #6c757d;">🔧 Schema Diagnostics</a>';
+    html += '</div>';
     
     if (clients.length === 0) {
         html += '<p style="margin-top: 20px;">No clients yet. Create your first client to get started.</p>';
@@ -384,6 +387,135 @@ router.post('/clients/:client_id/delete', asyncHandler(async (req, res) => {
     const layoutPath = path.join(__dirname, '../views/layout.html');
     const layout = fs.readFileSync(layoutPath, 'utf8')
         .replace('{{title}}', 'Client Deleted')
+        .replace('{{content}}', html);
+    res.send(layout);
+}));
+
+/**
+ * GET /ui/diagnostics/schema
+ * Schema diagnostic page - checks database schema
+ */
+router.get('/diagnostics/schema', asyncHandler(async (req, res) => {
+    const pool = require('../db/connection');
+    const client = await pool.connect();
+    
+    let html = '<h2>🔧 Schema Diagnostics</h2>';
+    html += '<p style="margin-bottom: 20px;">Checking database schema for potential issues...</p>';
+    
+    try {
+        // Get column information for workouts table
+        const result = await client.query(`
+            SELECT 
+                column_name,
+                data_type,
+                is_nullable,
+                column_default
+            FROM information_schema.columns
+            WHERE table_name = 'workouts'
+            ORDER BY ordinal_position;
+        `);
+        
+        html += '<div style="background: #f8f9fa; padding: 20px; border-radius: 8px; margin: 20px 0;">';
+        html += '<h3>Workouts Table Schema</h3>';
+        html += '<table style="width: 100%; border-collapse: collapse;">';
+        html += '<thead><tr style="background: #e9ecef;"><th style="padding: 10px; text-align: left;">Column</th><th style="padding: 10px; text-align: left;">Type</th><th style="padding: 10px; text-align: left;">Nullable</th></tr></thead>';
+        html += '<tbody>';
+        
+        result.rows.forEach(row => {
+            const rowStyle = row.column_name === 'duration_seconds' && row.data_type !== 'real' && row.data_type !== 'double precision' 
+                ? 'style="background: #fff3cd;"' 
+                : '';
+            html += `<tr ${rowStyle}>`;
+            html += `<td style="padding: 8px; border-bottom: 1px solid #dee2e6;"><strong>${row.column_name}</strong></td>`;
+            html += `<td style="padding: 8px; border-bottom: 1px solid #dee2e6;"><code>${row.data_type}</code></td>`;
+            html += `<td style="padding: 8px; border-bottom: 1px solid #dee2e6;">${row.is_nullable}</td>`;
+            html += `</tr>`;
+        });
+        
+        html += '</tbody></table>';
+        html += '</div>';
+        
+        // Check duration_seconds specifically
+        const durationCheck = result.rows.find(r => r.column_name === 'duration_seconds');
+        if (durationCheck) {
+            html += '<div style="margin: 20px 0;">';
+            if (durationCheck.data_type === 'real' || durationCheck.data_type === 'double precision') {
+                html += '<div style="background: #d4edda; padding: 15px; border-radius: 8px; border: 1px solid #c3e6cb;">';
+                html += '<strong style="color: #155724;">✓ duration_seconds column type is correct</strong>';
+                html += `<p style="margin: 5px 0 0 0; color: #155724;">Type: <code>${durationCheck.data_type}</code> - Can accept decimal values</p>`;
+                html += '</div>';
+            } else {
+                html += '<div style="background: #f8d7da; padding: 15px; border-radius: 8px; border: 1px solid #f5c6cb;">';
+                html += '<strong style="color: #721c24;">✗ duration_seconds column type is incorrect</strong>';
+                html += `<p style="margin: 5px 0 0 0; color: #721c24;">Current type: <code>${durationCheck.data_type}</code> - Should be <code>REAL</code></p>`;
+                html += '<p style="margin: 10px 0 0 0; color: #721c24;">Run this SQL to fix: <code style="background: white; padding: 5px; border-radius: 4px;">ALTER TABLE workouts ALTER COLUMN duration_seconds TYPE REAL;</code></p>';
+                html += '</div>';
+            }
+            html += '</div>';
+        } else {
+            html += '<div style="background: #f8d7da; padding: 15px; border-radius: 8px; border: 1px solid #f5c6cb; margin: 20px 0;">';
+            html += '<strong style="color: #721c24;">✗ duration_seconds column not found!</strong>';
+            html += '</div>';
+        }
+        
+        // Check sample workout data
+        const sampleResult = await client.query(`
+            SELECT 
+                id,
+                duration_seconds,
+                workout_type,
+                start_time
+            FROM workouts
+            ORDER BY created_at DESC
+            LIMIT 5;
+        `);
+        
+        if (sampleResult.rows.length > 0) {
+            html += '<div style="background: #f8f9fa; padding: 20px; border-radius: 8px; margin: 20px 0;">';
+            html += '<h3>Sample Workout Durations (Last 5)</h3>';
+            html += '<table style="width: 100%; border-collapse: collapse;">';
+            html += '<thead><tr style="background: #e9ecef;"><th style="padding: 10px; text-align: left;">ID</th><th style="padding: 10px; text-align: left;">Duration (seconds)</th><th style="padding: 10px; text-align: left;">Type</th><th style="padding: 10px; text-align: left;">Status</th></tr></thead>';
+            html += '<tbody>';
+            
+            sampleResult.rows.forEach(row => {
+                const duration = row.duration_seconds;
+                const isDecimal = duration != null && duration % 1 !== 0;
+                const status = isDecimal ? '✓ Decimal' : 'Integer';
+                const statusColor = isDecimal ? '#28a745' : '#ffc107';
+                
+                html += '<tr>';
+                html += `<td style="padding: 8px; border-bottom: 1px solid #dee2e6;">${row.id}</td>`;
+                html += `<td style="padding: 8px; border-bottom: 1px solid #dee2e6;"><code>${duration}</code></td>`;
+                html += `<td style="padding: 8px; border-bottom: 1px solid #dee2e6;">${row.workout_type}</td>`;
+                html += `<td style="padding: 8px; border-bottom: 1px solid #dee2e6;"><span style="color: ${statusColor};">${status}</span></td>`;
+                html += '</tr>';
+            });
+            
+            html += '</tbody></table>';
+            html += '</div>';
+        } else {
+            html += '<div style="background: #e7f3ff; padding: 15px; border-radius: 8px; margin: 20px 0;">';
+            html += '<p style="margin: 0;">No workouts in database yet. Try syncing from the iOS app to see if they insert successfully.</p>';
+            html += '</div>';
+        }
+        
+    } catch (error) {
+        html += '<div style="background: #f8d7da; padding: 15px; border-radius: 8px; border: 1px solid #f5c6cb; margin: 20px 0;">';
+        html += '<strong style="color: #721c24;">Error checking schema:</strong>';
+        html += `<p style="color: #721c24; margin: 5px 0 0 0;"><code>${error.message}</code></p>`;
+        html += '</div>';
+    } finally {
+        client.release();
+    }
+    
+    html += '<div style="margin-top: 30px;">';
+    html += '<a href="/ui" class="btn">Back to Clients</a> ';
+    html += '<button onclick="location.reload()" class="btn" style="background-color: #6c757d;">🔄 Refresh</button>';
+    html += '</div>';
+    
+    const layoutPath = path.join(__dirname, '../views/layout.html');
+    const layout = fs.readFileSync(layoutPath, 'utf8')
+        .replace('{{title}}', 'Schema Diagnostics')
         .replace('{{content}}', html);
     res.send(layout);
 }));
