@@ -112,3 +112,6 @@ iOSInjectionProject/
 !*.xcworkspace/xcshareddata/
 
 temp_repo/
+node_modules
+.env
+.env.*
