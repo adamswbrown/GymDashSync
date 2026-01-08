@@ -17,6 +17,10 @@ class SyncViewModel: ObservableObject {
     @Published var lastError: AppError?
     @Published var lastSyncResults: [SyncResult] = []
     @Published var healthKitError: AppError?
+    @Published var workoutsSynced: Int = 0
+    @Published var profileMetricsSynced: Int = 0
+    @Published var mostRecentWorkoutSynced: WorkoutData? = nil
+    @Published var backendHostname: String = ""
     
     private let syncManager: SyncManager
     private let errorHistory = ErrorHistory.shared
@@ -24,6 +28,16 @@ class SyncViewModel: ObservableObject {
     
     init() {
         self.syncManager = SyncManager()
+        
+        // Extract backend hostname from config
+        self.backendHostname = syncManager.backendStore.config.hostname
+        
+        // Set up callback for most recent workout changes
+        syncManager.backendStore.onMostRecentWorkoutChanged = { [weak self] workout in
+            DispatchQueue.main.async {
+                self?.mostRecentWorkoutSynced = workout
+            }
+        }
         
         // Observe sync status changes
         syncManager.onSyncStatusChanged = { [weak self] syncing, lastSync, error in
@@ -59,6 +73,23 @@ class SyncViewModel: ObservableObject {
                 print("[SyncViewModel] onSyncComplete callback fired with \(results.count) result(s)")
                 self?.lastSyncResults = results
                 print("[SyncViewModel] lastSyncResults updated, now has \(self?.lastSyncResults.count ?? 0) result(s)")
+                
+                // Separate workout and profile metric results by checking endpoint
+                var workoutCount = 0
+                var profileMetricCount = 0
+                
+                for result in results {
+                    if let endpoint = result.endpoint {
+                        if endpoint.contains("workouts") {
+                            workoutCount += result.recordsInserted
+                        } else if endpoint.contains("profile-metrics") {
+                            profileMetricCount += result.recordsInserted
+                        }
+                    }
+                }
+                
+                self?.workoutsSynced = workoutCount
+                self?.profileMetricsSynced = profileMetricCount
             }
         }
         
@@ -283,6 +314,10 @@ class SyncViewModel: ObservableObject {
         
         isSyncing = true
         lastError = nil
+        
+        // Reset counts at the start of each sync
+        workoutsSynced = 0
+        profileMetricsSynced = 0
         
         // Note: This is a simplified sync - in production, you'd want to collect
         // objects from HealthKit first, then sync them

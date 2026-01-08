@@ -29,7 +29,7 @@ async function initializeDatabase() {
                 workout_type TEXT NOT NULL,
                 start_time TIMESTAMPTZ NOT NULL,
                 end_time TIMESTAMPTZ NOT NULL,
-                duration_seconds INTEGER NOT NULL,
+                duration_seconds REAL NOT NULL,
                 calories_active REAL,
                 distance_meters REAL,
                 avg_heart_rate REAL,
@@ -96,6 +96,28 @@ async function initializeDatabase() {
         
         for (const indexSql of indexes) {
             await client.query(indexSql);
+        }
+        
+        // Migration: Alter duration_seconds from INTEGER to REAL if needed
+        // This handles existing databases that were created with INTEGER
+        try {
+            await client.query(`
+                DO $$
+                BEGIN
+                    IF EXISTS (
+                        SELECT 1 FROM information_schema.columns 
+                        WHERE table_name = 'workouts' 
+                        AND column_name = 'duration_seconds' 
+                        AND data_type = 'integer'
+                    ) THEN
+                        ALTER TABLE workouts ALTER COLUMN duration_seconds TYPE REAL;
+                        RAISE NOTICE 'Migrated duration_seconds from INTEGER to REAL';
+                    END IF;
+                END $$;
+            `);
+        } catch (error) {
+            // If migration fails, log but don't fail initialization
+            console.warn('Warning: Could not migrate duration_seconds column:', error.message);
         }
         
         console.log('PostgreSQL schema initialized successfully');

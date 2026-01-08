@@ -180,7 +180,7 @@ public class SyncManager: NSObject, HDSQueryObserverDelegate {
                     // Update the cached authorization state
                     let wasAuthorized = self.isAuthorized
                     self.isAuthorized = isAuthorized
-                    
+                
                     // Provide clear feedback based on actual status from test reads
                     if isAuthorized {
                         print("[SyncManager] SUCCESS: Permissions granted (verified via test reads)")
@@ -313,10 +313,10 @@ public class SyncManager: NSObject, HDSQueryObserverDelegate {
                         if authorizedCount == 0 && deniedCount > 0 {
                             print("[SyncManager] WARNING: \(deniedCount) type(s) denied. User can enable in Settings → Privacy & Security → Health → GymDashSync")
                         } else if authorizedCount == 0 && deniedCount == 0 {
-                            print("[SyncManager] INFO: Permissions still not determined - user may not have responded to dialog yet")
-                        }
+                    print("[SyncManager] INFO: Permissions still not determined - user may not have responded to dialog yet")
+                }
                     }
-                    
+                
                     // Call completion with actual authorization state from test reads
                     completion(isAuthorized, error)
                 }
@@ -400,7 +400,7 @@ public class SyncManager: NSObject, HDSQueryObserverDelegate {
                     // Update the cached authorization state
                     let wasAuthorized = self.isAuthorized
                     self.isAuthorized = isAuthorized
-                    
+                
                     // Provide clear feedback based on actual status from test reads
                     if isAuthorized {
                         print("[SyncManager] SUCCESS: Profile permissions granted (verified via test reads)")
@@ -414,10 +414,10 @@ public class SyncManager: NSObject, HDSQueryObserverDelegate {
                         if authorizedCount == 0 && deniedCount > 0 {
                     print("[SyncManager] WARNING: \(deniedCount) profile type(s) denied. User can enable in Settings → Privacy & Security → Health → GymDashSync")
                         } else if authorizedCount == 0 && deniedCount == 0 {
-                            print("[SyncManager] INFO: Permissions still not determined - user may not have responded to dialog yet")
-                        }
+                    print("[SyncManager] INFO: Permissions still not determined - user may not have responded to dialog yet")
                 }
-                    
+                }
+                
                     // Call completion with actual authorization state from test reads
                     completion(isAuthorized, error)
                 }
@@ -1019,7 +1019,21 @@ public class SyncManager: NSObject, HDSQueryObserverDelegate {
                 completedObservers += 1
                 
                 if let error = error {
-                    print("[SyncManager] Observer \(index + 1) execution failed: \(error.localizedDescription)")
+                    print("[SyncManager] Observer \(index + 1) execution failed for type \(observerType)")
+                    print("[SyncManager] Error type: \(type(of: error))")
+                    print("[SyncManager] Error description: \(error.localizedDescription)")
+                    if let appError = error as? AppError {
+                        print("[SyncManager] AppError details: category=\(appError.category.rawValue), message=\(appError.message)")
+                        if let detail = appError.detail {
+                            print("[SyncManager] AppError detail: \(detail)")
+                        }
+                        if let context = appError.context, let endpoint = context.endpoint {
+                            print("[SyncManager] AppError endpoint: \(endpoint)")
+                        }
+                    } else if let nsError = error as NSError? {
+                        print("[SyncManager] NSError domain: \(nsError.domain), code: \(nsError.code)")
+                        print("[SyncManager] NSError userInfo: \(nsError.userInfo)")
+                    }
                     syncErrors.append(error)
                 } else if success {
                     print("[SyncManager] Observer \(index + 1) execution completed successfully")
@@ -1070,20 +1084,36 @@ public class SyncManager: NSObject, HDSQueryObserverDelegate {
             // This ensures the ViewModel's onSyncComplete callback gets the combined results
             self.backendStore.onSyncComplete?(self.currentSyncResults)
             
-            self.isSyncing = false
-            self.lastSyncDate = Date()
+                    self.isSyncing = false
+                    self.lastSyncDate = Date()
             
             // Report completion
             if syncErrors.isEmpty {
                 print("[SyncManager] Manual sync completed successfully")
-                self.onSyncStatusChanged?(false, self.lastSyncDate, nil)
-                completion(true, nil)
+                    self.onSyncStatusChanged?(false, self.lastSyncDate, nil)
+                    completion(true, nil)
             } else {
                 let firstError = syncErrors.first!
                 print("[SyncManager] Manual sync completed with \(syncErrors.count) error(s)")
+                
+                // Log detailed error information
+                if let appError = firstError as? AppError {
+                    print("[SyncManager] Error details: category=\(appError.category.rawValue), message=\(appError.message), detail=\(appError.detail ?? "nil")")
+                } else {
+                    print("[SyncManager] Error type: \(type(of: firstError)), description: \(firstError.localizedDescription)")
+                    // Convert to AppError for better error handling
+                    let appError = ErrorMapper.unknownError(
+                        message: "Sync failed: \(firstError.localizedDescription)",
+                        error: firstError
+                    )
+                    self.onSyncStatusChanged?(false, self.lastSyncDate, appError)
+                    completion(false, appError)
+                    return
+                }
+                
                 self.onSyncStatusChanged?(false, self.lastSyncDate, firstError)
                 completion(false, firstError)
-            }
+                }
             
             // Clear accumulating results for next sync
             self.currentSyncResults = []

@@ -35,6 +35,16 @@ struct ContentView: View {
                     // Sync Button
                     syncButton
                     
+                    // Sync Summary Section (only shown after successful sync)
+                    if !viewModel.isSyncing && viewModel.lastSyncDate != nil {
+                        syncSummarySection
+                    }
+                    
+                    // Most Recent Workout Section
+                    if let workout = viewModel.mostRecentWorkoutSynced {
+                        mostRecentWorkoutSection(workout: workout)
+                    }
+                    
                     // Permission Buttons
                     if !viewModel.isAuthorized {
                         permissionButtons
@@ -92,6 +102,23 @@ struct ContentView: View {
                 .background(Color.orange.opacity(0.1))
                 .cornerRadius(6)
             }
+            
+            // Connection Status Section
+            VStack(alignment: .leading, spacing: 8) {
+                HStack {
+                    Image(systemName: "server.rack")
+                        .foregroundColor(.green)
+                    Text("Connected to Railway backend")
+                        .font(.subheadline)
+                        .fontWeight(.medium)
+                }
+                Text(viewModel.backendHostname)
+                    .font(.caption)
+                    .foregroundColor(.secondary)
+            }
+            .padding(12)
+            .background(Color.green.opacity(0.1))
+            .cornerRadius(8)
             
             // Authorization Status
             HStack {
@@ -192,19 +219,28 @@ struct ContentView: View {
                 .cornerRadius(8)
             }
             
-            // Last Sync
-            if let lastSync = viewModel.lastSyncDate {
-                VStack(spacing: 4) {
-                    Text("Last Sync")
-                        .font(.caption)
-                        .foregroundColor(.secondary)
-                    Text(lastSync, style: .relative)
+            // Sync State Section
+            VStack(spacing: 8) {
+                if viewModel.isSyncing {
+                    HStack {
+                        ProgressView()
+                        Text("Syncing...")
+                            .font(.headline)
+                    }
+                } else if let lastSync = viewModel.lastSyncDate {
+                    VStack(spacing: 4) {
+                        Text("Last synced")
+                            .font(.caption)
+                            .foregroundColor(.secondary)
+                        Text(lastSync, style: .relative)
+                            .font(.subheadline)
+                            .fontWeight(.medium)
+                    }
+                } else {
+                    Text("No sync yet")
                         .font(.subheadline)
+                        .foregroundColor(.secondary)
                 }
-            } else {
-                Text("No sync yet")
-                    .font(.subheadline)
-                    .foregroundColor(.secondary)
             }
             
             // Refresh Status Button (if not authorized)
@@ -220,12 +256,6 @@ struct ContentView: View {
                     .foregroundColor(.blue)
                 }
                 .padding(.top, 4)
-            }
-            
-            // Syncing Indicator
-            if viewModel.isSyncing {
-                ProgressView()
-                    .padding()
             }
         }
         .padding()
@@ -347,6 +377,79 @@ struct ContentView: View {
                     .foregroundColor(.white)
                     .cornerRadius(10)
             }
+        }
+    }
+    
+    private var syncSummarySection: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            Text("Sync Summary")
+                .font(.headline)
+            
+            HStack {
+                Text("Workouts synced:")
+                    .foregroundColor(.secondary)
+                Spacer()
+                Text("\(viewModel.workoutsSynced)")
+                    .fontWeight(.semibold)
+            }
+            
+            HStack {
+                Text("Profile metrics synced:")
+                    .foregroundColor(.secondary)
+                Spacer()
+                Text("\(viewModel.profileMetricsSynced)")
+                    .fontWeight(.semibold)
+            }
+        }
+        .padding()
+        .background(Color(.systemGray6))
+        .cornerRadius(8)
+    }
+    
+    private func mostRecentWorkoutSection(workout: WorkoutData) -> some View {
+        VStack(alignment: .leading, spacing: 8) {
+            Text("Most recent workout synced")
+                .font(.caption)
+                .fontWeight(.semibold)
+                .foregroundColor(.secondary)
+            
+            VStack(alignment: .leading, spacing: 4) {
+                HStack {
+                    Text("Type:")
+                        .foregroundColor(.secondary)
+                    Text(workout.workoutType.capitalized)
+                        .fontWeight(.medium)
+                }
+                
+                HStack {
+                    Text("Start time:")
+                        .foregroundColor(.secondary)
+                    Text(workout.startTime, style: .date)
+                        .fontWeight(.medium)
+                    Text(workout.startTime, style: .time)
+                        .fontWeight(.medium)
+                }
+                
+                HStack {
+                    Text("Duration:")
+                        .foregroundColor(.secondary)
+                    Text(formatDuration(workout.durationSeconds))
+                        .fontWeight(.medium)
+                }
+            }
+        }
+        .padding()
+        .background(Color.blue.opacity(0.1))
+        .cornerRadius(8)
+    }
+    
+    private func formatDuration(_ seconds: Double) -> String {
+        let hours = Int(seconds) / 3600
+        let minutes = (Int(seconds) % 3600) / 60
+        if hours > 0 {
+            return "\(hours)h \(minutes)m"
+        } else {
+            return "\(minutes)m"
         }
     }
     

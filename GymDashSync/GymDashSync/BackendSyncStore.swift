@@ -27,11 +27,20 @@ public struct BackendConfig {
     }
     
     public static var `default`: BackendConfig {
-        // Default to Mac's IP address for physical device testing, fallback to localhost for simulator
+        // Default to Railway production URL
         // Can be overridden via UserDefaults key "GymDashSync.BackendURL"
-        let defaultURL = UserDefaults.standard.string(forKey: "GymDashSync.BackendURL") ?? "http://192.168.68.51:3001"
+        let defaultURL = UserDefaults.standard.string(forKey: "GymDashSync.BackendURL") ?? "https://gymdashsync-production.up.railway.app"
         let key = UserDefaults.standard.string(forKey: "GymDashSync.APIKey")
         return BackendConfig(baseURL: defaultURL, apiKey: key)
+    }
+    
+    /// Extract hostname from baseURL for display purposes
+    public var hostname: String {
+        guard let url = URL(string: baseURL),
+              let host = url.host else {
+            return baseURL
+        }
+        return host
     }
 }
 
@@ -47,12 +56,16 @@ public struct BackendConfig {
 /// This store does NOT derive identity from HealthKit data.
 /// It assumes client_id is already attached to each object.
 public class BackendSyncStore: HDSExternalStoreProtocol {
-    private let config: BackendConfig
+    public let config: BackendConfig
     private let session: URLSession
     
     // Dev mode: Track last sync results
     public var lastSyncResults: [SyncResult] = []
     public var onSyncComplete: (([SyncResult]) -> Void)?
+    
+    // Track most recent workout synced
+    public var mostRecentWorkoutSynced: WorkoutData? = nil
+    public var onMostRecentWorkoutChanged: ((WorkoutData?) -> Void)?
     
     public init(config: BackendConfig = .default) {
         self.config = config
@@ -220,8 +233,20 @@ public class BackendSyncStore: HDSExternalStoreProtocol {
             // Check if any sync failed
             let failedResults = syncResults.filter { !$0.success }
             if let firstFailure = failedResults.first, let error = firstFailure.error {
+                print("[BackendSyncStore] Sync failed with error: \(error)")
+                if let appError = error as? AppError {
+                    print("[BackendSyncStore] AppError details: category=\(appError.category.rawValue), message=\(appError.message)")
+                    if let detail = appError.detail {
+                        print("[BackendSyncStore] Error detail: \(detail)")
+                    }
+                    if let context = appError.context {
+                        print("[BackendSyncStore] Error context: endpoint=\(context.endpoint ?? "nil"), statusCode=\(context.statusCode?.description ?? "nil")")
+                    }
+                }
                 completion(error)
             } else {
+                let successCount = syncResults.filter { $0.success }.count
+                print("[BackendSyncStore] All syncs completed successfully (\(successCount)/\(syncResults.count))")
                 completion(nil)
             }
         }
@@ -637,21 +662,34 @@ public class BackendSyncStore: HDSExternalStoreProtocol {
             if let data = data {
                 do {
                     if let json = try JSONSerialization.jsonObject(with: data) as? [String: Any] {
-                        if let report = json["report"] as? [String: Any] {
-                            recordsInserted = report["count_inserted"] as? Int ?? workouts.count
-                            duplicatesSkipped = report["duplicates_skipped"] as? Int ?? 0
-                            warningsCount = report["warnings_count"] as? Int ?? 0
-                            errorsCount = report["errors_count"] as? Int ?? 0
-                            
-                            if let errors = report["errors"] as? [String] {
-                                validationErrors = errors
-                            }
-                        } else if let count = json["count"] as? Int {
-                            recordsInserted = count
+                        // Backend returns count_inserted, duplicates_skipped, etc. directly
+                        if let inserted = json["count_inserted"] as? Int {
+                            recordsInserted = inserted
+                        }
+                        if let duplicates = json["duplicates_skipped"] as? Int {
+                            duplicatesSkipped = duplicates
+                        }
+                        if let warnings = json["warnings_count"] as? Int {
+                            warningsCount = warnings
+                        }
+                        if let errors = json["errors_count"] as? Int {
+                            errorsCount = errors
+                        }
+                        if let errors = json["errors"] as? [String] {
+                            validationErrors = errors
                         }
                     }
                 } catch {
                     // Ignore parse errors - use defaults
+                }
+            }
+            
+            // After successful completion, find most recent workout
+            if !workouts.isEmpty {
+                let mostRecent = workouts.max(by: { $0.startTime < $1.startTime })
+                self.mostRecentWorkoutSynced = mostRecent
+                DispatchQueue.main.async {
+                    self.onMostRecentWorkoutChanged?(mostRecent)
                 }
             }
             
@@ -792,17 +830,21 @@ public class BackendSyncStore: HDSExternalStoreProtocol {
             if let data = data {
                 do {
                     if let json = try JSONSerialization.jsonObject(with: data) as? [String: Any] {
-                        if let report = json["report"] as? [String: Any] {
-                            recordsInserted = report["count_inserted"] as? Int ?? metrics.count
-                            duplicatesSkipped = report["duplicates_skipped"] as? Int ?? 0
-                            warningsCount = report["warnings_count"] as? Int ?? 0
-                            errorsCount = report["errors_count"] as? Int ?? 0
-                            
-                            if let errors = report["errors"] as? [String] {
-                                validationErrors = errors
-                            }
-                        } else if let count = json["count"] as? Int {
-                            recordsInserted = count
+                        // Backend returns count_inserted, etc. directly
+                        if let inserted = json["count_inserted"] as? Int {
+                            recordsInserted = inserted
+                        }
+                        if let duplicates = json["duplicates_skipped"] as? Int {
+                            duplicatesSkipped = duplicates
+                        }
+                        if let warnings = json["warnings_count"] as? Int {
+                            warningsCount = warnings
+                        }
+                        if let errors = json["errors_count"] as? Int {
+                            errorsCount = errors
+                        }
+                        if let errors = json["errors"] as? [String] {
+                            validationErrors = errors
                         }
                     }
                 } catch {
