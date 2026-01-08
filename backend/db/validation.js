@@ -198,12 +198,13 @@ function validateProfileMetric(metric, clientId) {
 /**
  * Check if client_id exists
  */
-function validateClientId(clientId) {
+async function validateClientId(clientId) {
     if (!clientId) {
         return { valid: false, error: 'client_id is required' };
     }
     
-    if (!clientExists(clientId)) {
+    const exists = await clientExists(clientId);
+    if (!exists) {
         return { valid: false, error: `client_id does not exist: ${clientId}` };
     }
     

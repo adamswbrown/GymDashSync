@@ -115,3 +115,4 @@ temp_repo/
 node_modules
 .env
 .env.*
+database.sqlite*

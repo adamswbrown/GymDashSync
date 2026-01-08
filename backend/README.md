@@ -1,6 +1,6 @@
 # GymDashSync Backend
 
-Lightweight backend ingestion service for receiving HealthKit data from iOS clients. Uses SQLite for local development with a PostgreSQL-compatible schema for easy migration later.
+Lightweight backend ingestion service for receiving HealthKit data from iOS clients. Uses PostgreSQL for data storage, deployed on Railway.
 
 ## Identity Model: Pairing Codes
 
@@ -25,14 +25,14 @@ The pairing logic is isolated from the data ingestion pipeline, making it easy t
 
 This backend service:
 - Receives HealthKit data from iOS clients via HTTP POST
-- Stores data in SQLite (file-based, persisted on disk)
+- Stores data in PostgreSQL (hosted on Railway)
 - Provides **full web UI for coaches** to manage clients and inspect data
 - Validates all ingested data with comprehensive error checking
 - Deduplicates workouts automatically
 - Tracks data quality warnings
-- Uses portable SQL that migrates cleanly to PostgreSQL
+- Uses native PostgreSQL types (IDENTITY columns, TIMESTAMPTZ)
 
-**Note:** SQLite is used for development. Schema is intentionally portable for PostgreSQL migration later.
+**Deployment:** See `docs/railway-deployment.md` for Railway deployment instructions.
 
 ### Coach Web UI (Primary Interface)
 
@@ -65,7 +65,18 @@ npm install
 
 This will install:
 - `express` - Web framework
-- `better-sqlite3` - SQLite database driver
+- `pg` - PostgreSQL client library
+
+### Environment Setup
+
+Create a `.env` file in the `backend/` directory (see `.env.example`):
+
+```
+DATABASE_URL=postgresql://user:password@localhost:5432/gymdashsync
+PORT=3001
+```
+
+**Required:** `DATABASE_URL` must be set. Railway provides this automatically in production.
 
 ## Running the Server
 
@@ -76,40 +87,54 @@ npm start
 ```
 
 The server will:
+- Connect to PostgreSQL using `DATABASE_URL`
 - Initialize the database schema (creates tables and indexes if missing)
-- Start listening on port 3000
+- Start listening on port 3001 (or `process.env.PORT`)
 - Log startup information to console
+
+**Note:** The server will exit with code 1 if database connection fails (fail-fast behavior).
 
 ### Server Endpoints
 
 Once running, the server provides:
 
-- **Health Check**: `GET http://localhost:3000/health`
-- **Ingest Workouts**: `POST http://localhost:3000/ingest/workouts`
-- **Ingest Profile**: `POST http://localhost:3000/ingest/profile`
-- **Read Workouts**: `GET http://localhost:3000/workouts`
-- **Read Profile**: `GET http://localhost:3000/profile`
-- **Query Workouts**: `POST http://localhost:3000/workouts/query` (for iOS client fetchObjects)
-- **Query Profile**: `POST http://localhost:3000/profile-metrics/query` (for iOS client fetchObjects)
+- **Health Check**: `GET http://localhost:3001/health` (verifies database connectivity)
+- **Ingest Workouts**: `POST http://localhost:3001/ingest/workouts`
+- **Ingest Profile**: `POST http://localhost:3001/ingest/profile`
+- **Read Workouts**: `GET http://localhost:3001/workouts`
+- **Read Profile**: `GET http://localhost:3001/profile`
+- **Query Workouts**: `POST http://localhost:3001/workouts/query` (for iOS client fetchObjects)
+- **Query Profile**: `POST http://localhost:3001/profile-metrics/query` (for iOS client fetchObjects)
+- **Web UI**: `http://localhost:3001/ui`
 
 ## Database
 
-### Location
-The SQLite database file is created at: `backend/database.sqlite`
+### PostgreSQL Connection
+
+The backend connects to PostgreSQL using the `DATABASE_URL` environment variable:
+- Format: `postgresql://user:password@host:port/dbname`
+- Railway automatically provides this when PostgreSQL service is added
+- For local development, set in `.env` file
 
 ### Schema
 
 **Table: workouts**
 - Stores workout data (runs, walks, cycles, strength training, etc.)
-- Indexed on `client_id` and `start_time`
+- Uses `INTEGER GENERATED ALWAYS AS IDENTITY` for primary key
+- Uses `TIMESTAMPTZ` for timestamps (start_time, end_time, created_at)
+- Indexed on `client_id`, `start_time`, and `healthkit_uuid`
 
 **Table: profile_metrics**
 - Stores body metrics (height, weight, body fat percentage)
-- Indexed on `client_id` and `metric`
+- Uses `INTEGER GENERATED ALWAYS AS IDENTITY` for primary key
+- Uses `TIMESTAMPTZ` for timestamps (measured_at, created_at)
+- Indexed on `client_id`, `metric`, and `healthkit_uuid`
 
 **Table: clients**
 - Maps pairing codes to client_id (UUID)
 - Used for pairing code exchange
+- Uses `INTEGER GENERATED ALWAYS AS IDENTITY` for primary key
+- Uses `TIMESTAMPTZ` for created_at (with `DEFAULT now()`)
 - Indexed on `pairing_code` for fast lookups
 
 See `db/init.js` for full schema definition.
@@ -117,7 +142,7 @@ See `db/init.js` for full schema definition.
 ### Creating Clients and Pairing Codes
 
 **Via Web UI (Recommended):**
-1. Open `http://localhost:3000/ui` in your browser
+1. Open `http://localhost:3001/ui` in your browser
 2. Click "Create New Client"
 3. Optionally enter a label (e.g., "John Doe")
 4. Click "Create Client"
@@ -125,7 +150,7 @@ See `db/init.js` for full schema definition.
 
 **Via API:**
 ```bash
-curl -X POST http://localhost:3000/clients \
+curl -X POST http://localhost:3001/clients \
   -H "Content-Type: application/json" \
   -d '{"label": "John Doe"}'
 ```
@@ -145,7 +170,7 @@ Each client gets:
 
 ### Creating a Client
 
-1. Navigate to `http://localhost:3000/ui`
+1. Navigate to `http://localhost:3001/ui`
 2. Click "Create New Client"
 3. Enter an optional label (e.g., "John Doe")
 4. Click "Create Client"
@@ -176,7 +201,7 @@ All warnings are logged and visible in the UI.
 ### Pair Device
 
 ```bash
-curl -X POST http://localhost:3000/pair \
+curl -X POST http://localhost:3001/pair \
   -H "Content-Type: application/json" \
   -d '{
     "pairing_code": "ABC123"
@@ -204,7 +229,7 @@ curl -X POST http://localhost:3000/pair \
 **Important:** All workout payloads MUST include `client_id`. The backend will reject payloads without it.
 
 ```bash
-curl -X POST http://localhost:3000/ingest/workouts \
+curl -X POST http://localhost:3001/ingest/workouts \
   -H "Content-Type: application/json" \
   -d '[
     {
@@ -239,7 +264,7 @@ curl -X POST http://localhost:3000/ingest/workouts \
 **Important:** All profile metric payloads MUST include `client_id`. The backend will reject payloads without it.
 
 ```bash
-curl -X POST http://localhost:3000/ingest/profile \
+curl -X POST http://localhost:3001/ingest/profile \
   -H "Content-Type: application/json" \
   -d '[
     {
@@ -275,7 +300,7 @@ curl -X POST http://localhost:3000/ingest/profile \
 ### Read All Workouts
 
 ```bash
-curl http://localhost:3000/workouts
+curl http://localhost:3001/workouts
 ```
 
 **Response:**
@@ -301,7 +326,7 @@ curl http://localhost:3000/workouts
 ### Read All Profile Metrics
 
 ```bash
-curl http://localhost:3000/profile
+curl http://localhost:3001/profile
 ```
 
 **Response:**
@@ -333,7 +358,7 @@ curl http://localhost:3000/profile
 ### Query Workouts by UUIDs
 
 ```bash
-curl -X POST http://localhost:3000/workouts/query \
+curl -X POST http://localhost:3001/workouts/query \
   -H "Content-Type: application/json" \
   -d '{
     "uuids": ["550e8400-e29b-41d4-a716-446655440000"]
@@ -350,7 +375,7 @@ curl -X POST http://localhost:3000/workouts/query \
 ### Query Profile Metrics by UUIDs
 
 ```bash
-curl -X POST http://localhost:3000/profile-metrics/query \
+curl -X POST http://localhost:3001/profile-metrics/query \
   -H "Content-Type: application/json" \
   -d '{
     "uuids": ["550e8400-e29b-41d4-a716-446655440000"]
@@ -369,15 +394,20 @@ curl -X POST http://localhost:3000/profile-metrics/query \
 ```
 backend/
 ├── server.js              # Express app entry point
-├── database.sqlite        # SQLite database file (created on first run)
 ├── db/
-│   ├── init.js           # Database schema initialization
-│   ├── connection.js     # SQLite connection setup
-│   └── queries.js        # All SQL queries (prepared statements)
+│   ├── init.js           # PostgreSQL schema initialization (async)
+│   ├── connection.js     # PostgreSQL connection pool (pg.Pool)
+│   └── queries.js        # All SQL queries (async, native pg)
 ├── routes/
+│   ├── asyncHandler.js   # Shared async route wrapper
 │   ├── ingest.js         # POST endpoints for data ingestion
-│   └── read.js           # GET endpoints for data retrieval
+│   ├── read.js           # GET endpoints for data retrieval
+│   ├── pair.js           # Pairing code exchange
+│   ├── clients.js        # Client management
+│   ├── ui.js             # Web UI routes
+│   └── dev.js            # Dev-only endpoints
 ├── package.json          # Dependencies and scripts
+├── .env.example          # Environment variable template
 └── README.md            # This file
 ```
 
@@ -435,19 +465,21 @@ All ingest endpoints return detailed reports:
 
 ## Development Notes
 
-### SQL Portability
+### PostgreSQL Usage
 
-All SQL is written to be compatible with both SQLite and PostgreSQL:
-- Uses standard SQL types (TEXT, INTEGER, REAL)
-- No SQLite-specific features (no JSON blobs, no triggers)
-- Indexes use standard CREATE INDEX syntax
-- Prepared statements work in both databases
+All database operations use native PostgreSQL:
+- Uses `pg.Pool` for connection management
+- All queries are async/await
+- Native PostgreSQL types (IDENTITY, TIMESTAMPTZ)
+- Parameterized queries with `$1, $2, ...` syntax
+- Transactions use `BEGIN`/`COMMIT`/`ROLLBACK`
 
 ### Transactions
 
 Data ingestion uses transactions to ensure atomicity:
 - Multiple records are inserted in a single transaction
 - If any record fails, the entire batch is rolled back
+- Uses connection pool with proper client acquisition/release
 
 ### Error Handling
 
@@ -463,16 +495,29 @@ The server logs:
 - Each ingestion operation (client_id + count)
 - Errors with full stack traces
 
-## Future Migration to PostgreSQL
+## Deployment
 
-When ready to migrate to PostgreSQL:
+### Railway Deployment
 
-1. **Connection**: Replace `better-sqlite3` with `pg` (node-postgres)
-2. **Schema**: Convert `AUTOINCREMENT` to `SERIAL` or `GENERATED ALWAYS AS IDENTITY`
-3. **Queries**: Most SQL should work as-is (test thoroughly)
-4. **Connection Pooling**: Add connection pooling for production
+The backend is configured for Railway deployment:
+- Auto-detects Node.js from `package.json`
+- Runs `npm ci` for deterministic builds
+- Requires `DATABASE_URL` (auto-provided by Railway PostgreSQL service)
+- Health check endpoint verifies database connectivity
 
-The schema is intentionally designed to make this migration straightforward.
+See `../docs/railway-deployment.md` for detailed deployment instructions.
+
+### Local Development
+
+1. Set up local PostgreSQL database
+2. Create `.env` file with `DATABASE_URL`
+3. Run `npm install` (or `npm ci`)
+4. Run `npm start`
+
+The server will:
+- Connect to PostgreSQL on startup
+- Initialize schema automatically
+- Start listening on configured port
 
 ## Assumptions Validated
 

@@ -4,20 +4,18 @@
   "description": "Lightweight backend ingestion service for HealthKit data",
   "main": "server.js",
   "scripts": {
-    "start": "node server.js",
-    "dev": "node server.js",
-    "create-pairing": "node scripts/create-pairing-code.js"
+    "start": "node server.js"
   },
   "keywords": [
     "healthkit",
     "ingestion",
-    "sqlite"
+    "postgresql"
   ],
   "author": "",
   "license": "MIT",
   "dependencies": {
     "express": "^4.18.2",
-    "better-sqlite3": "^9.1.1"
+    "pg": "^8.11.3"
   }
 }
 

@@ -7,6 +7,7 @@
 
 const express = require('express');
 const { initializeDatabase } = require('./db/init');
+const { testConnection } = require('./db/connection');
 
 // Initialize Express app
 const app = express();
@@ -22,8 +23,15 @@ app.use((req, res, next) => {
     next();
 });
 
-// Initialize database on startup
-initializeDatabase();
+// Health check with DB connectivity (lightweight query)
+app.get('/health', async (req, res) => {
+    const dbHealthy = await testConnection();
+    res.status(dbHealthy ? 200 : 503).json({
+        status: dbHealthy ? 'ok' : 'unhealthy',
+        database: dbHealthy ? 'connected' : 'disconnected',
+        timestamp: new Date().toISOString()
+    });
+});
 
 // Routes
 const ingestRoutes = require('./routes/ingest');
@@ -52,14 +60,6 @@ app.use('/api/v1', readRoutes);  // GET /api/v1/workouts, GET /api/v1/profile-me
 app.use('/api/v1', pairRoutes);  // POST /api/v1/pair
 app.use('/api/v1', clientsRoutes);  // POST /api/v1/clients, GET /api/v1/clients
 
-// Health check endpoint
-app.get('/health', (req, res) => {
-    res.status(200).json({
-        status: 'ok',
-        timestamp: new Date().toISOString()
-    });
-});
-
 // Error handling middleware
 app.use((err, req, res, next) => {
     if (err instanceof SyntaxError && err.status === 400 && 'body' in err) {
@@ -78,23 +78,36 @@ app.use((err, req, res, next) => {
     });
 });
 
-// Start server
-app.listen(PORT, () => {
-    console.log(`=================================`);
-    console.log(`GymDashSync Backend Server`);
-    console.log(`Listening on port ${PORT}`);
-    console.log(`=================================`);
-    console.log(`🌐 Web UI: http://localhost:${PORT}/ui`);
-    console.log(``);
-    console.log(`API Endpoints:`);
-    console.log(`  Health: GET http://localhost:${PORT}/health`);
-    console.log(`  Pair: POST http://localhost:${PORT}/pair`);
-    console.log(`  Clients: POST/GET http://localhost:${PORT}/clients`);
-    console.log(`  Ingest workouts: POST http://localhost:${PORT}/ingest/workouts`);
-    console.log(`  Ingest profile: POST http://localhost:${PORT}/ingest/profile`);
-    console.log(``);
-    console.log(`Dev Endpoints:`);
-    console.log(`  Seed: POST http://localhost:${PORT}/dev/seed`);
-    console.log(`  Health: GET http://localhost:${PORT}/dev/health`);
-    console.log(`=================================`);
-});
+// Startup: Initialize DB then start server
+async function startServer() {
+    try {
+        console.log('Connecting to PostgreSQL...');
+        await initializeDatabase();
+        console.log('Database initialized successfully');
+        
+        app.listen(PORT, () => {
+            console.log(`=================================`);
+            console.log(`GymDashSync Backend Server`);
+            console.log(`Listening on port ${PORT}`);
+            console.log(`=================================`);
+            console.log(`🌐 Web UI: http://localhost:${PORT}/ui`);
+            console.log(``);
+            console.log(`API Endpoints:`);
+            console.log(`  Health: GET http://localhost:${PORT}/health`);
+            console.log(`  Pair: POST http://localhost:${PORT}/pair`);
+            console.log(`  Clients: POST/GET http://localhost:${PORT}/clients`);
+            console.log(`  Ingest workouts: POST http://localhost:${PORT}/ingest/workouts`);
+            console.log(`  Ingest profile: POST http://localhost:${PORT}/ingest/profile`);
+            console.log(``);
+            console.log(`Dev Endpoints:`);
+            console.log(`  Seed: POST http://localhost:${PORT}/dev/seed`);
+            console.log(`  Health: GET http://localhost:${PORT}/dev/health`);
+            console.log(`=================================`);
+        });
+    } catch (error) {
+        console.error('Failed to start server:', error);
+        process.exit(1);
+    }
+}
+
+startServer();

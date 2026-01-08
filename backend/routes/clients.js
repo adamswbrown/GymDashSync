@@ -7,7 +7,8 @@
 
 const express = require('express');
 const router = express.Router();
-const { createClient, getAllClientsWithStats, getClientById, deleteClient } = require('../db/queries');
+const asyncHandler = require('./asyncHandler');
+const { createClient, getAllClientsWithStats, getClientById, deleteClient, clientExists } = require('../db/queries');
 
 /**
  * Generate a human-friendly pairing code
@@ -37,147 +38,108 @@ function generateUUID() {
  * POST /clients
  * Create a new client with pairing code
  */
-router.post('/', (req, res) => {
-    try {
-        const { label } = req.body;
-        
-        // Generate client_id and pairing_code
-        const clientId = generateUUID();
-        let pairingCode = generatePairingCode();
-        
-        // Ensure uniqueness (retry if collision)
-        let attempts = 0;
-        while (attempts < 10) {
-            try {
-                createClient(clientId, pairingCode, label || null);
-                break;
-            } catch (error) {
-                if (error.message.includes('UNIQUE constraint failed') && error.message.includes('pairing_code')) {
-                    pairingCode = generatePairingCode();
-                    attempts++;
-                } else {
-                    throw error;
-                }
+router.post('/', asyncHandler(async (req, res) => {
+    const { label } = req.body;
+    
+    // Generate client_id and pairing_code
+    const clientId = generateUUID();
+    let pairingCode = generatePairingCode();
+    
+    // Ensure uniqueness (retry if collision)
+    let attempts = 0;
+    while (attempts < 10) {
+        try {
+            await createClient(clientId, pairingCode, label || null);
+            break;
+        } catch (error) {
+            // PostgreSQL error messages differ from SQLite
+            if (error.message && error.message.includes('duplicate key value') && error.message.includes('pairing_code')) {
+                pairingCode = generatePairingCode();
+                attempts++;
+            } else {
+                throw error;
             }
         }
-        
-        if (attempts >= 10) {
-            return res.status(500).json({
-                error: 'Failed to generate unique pairing code after multiple attempts'
-            });
-        }
-        
-        console.log(`[CLIENTS] Created: client_id=${clientId}, pairing_code=${pairingCode}, label=${label || 'none'}`);
-        
-        res.status(201).json({
-            client_id: clientId,
-            pairing_code: pairingCode,
-            label: label || null
-        });
-        
-    } catch (error) {
-        console.error('[CLIENTS] Create error:', error);
-        res.status(500).json({
-            error: error.message
+    }
+    
+    if (attempts >= 10) {
+        return res.status(500).json({
+            error: 'Failed to generate unique pairing code after multiple attempts'
         });
     }
-});
+    
+    console.log(`[CLIENTS] Created: client_id=${clientId}, pairing_code=${pairingCode}, label=${label || 'none'}`);
+    
+    res.status(201).json({
+        client_id: clientId,
+        pairing_code: pairingCode,
+        label: label || null
+    });
+}));
 
 /**
  * GET /clients
  * List all clients with summary stats
  */
-router.get('/', (req, res) => {
-    try {
-        const clients = getAllClientsWithStats();
-        
-        // Format response
-        const formatted = clients.map(client => ({
-            id: client.id,
-            client_id: client.client_id,
-            pairing_code: client.pairing_code,
-            label: client.label,
-            created_at: client.created_at,
-            workouts_count: client.workouts_count || 0,
-            last_workout_start_time: client.last_workout_start_time || null,
-            warnings_count: client.warnings_count || 0
-        }));
-        
-        res.status(200).json(formatted);
-        
-    } catch (error) {
-        console.error('[CLIENTS] List error:', error);
-        res.status(500).json({
-            error: error.message
-        });
-    }
-});
+router.get('/', asyncHandler(async (req, res) => {
+    const clients = await getAllClientsWithStats();
+    
+    // Format response
+    const formatted = clients.map(client => ({
+        id: client.id,
+        client_id: client.client_id,
+        pairing_code: client.pairing_code,
+        label: client.label,
+        created_at: client.created_at,
+        workouts_count: parseInt(client.workouts_count) || 0,
+        last_workout_start_time: client.last_workout_start_time || null,
+        warnings_count: parseInt(client.warnings_count) || 0
+    }));
+    
+    res.status(200).json(formatted);
+}));
 
 /**
  * GET /clients/:client_id
  * Get a specific client
  */
-router.get('/:client_id', (req, res) => {
-    try {
-        const { client_id } = req.params;
-        const client = getClientById(client_id);
-        
-        if (!client) {
-            return res.status(404).json({
-                error: 'Client not found'
-            });
-        }
-        
-        res.status(200).json(client);
-        
-    } catch (error) {
-        console.error('[CLIENTS] Get error:', error);
-        res.status(500).json({
-            error: error.message
+router.get('/:client_id', asyncHandler(async (req, res) => {
+    const { client_id } = req.params;
+    const client = await getClientById(client_id);
+    
+    if (!client) {
+        return res.status(404).json({
+            error: 'Client not found'
         });
     }
-});
+    
+    res.status(200).json(client);
+}));
 
 /**
  * DELETE /clients/:client_id
  * Delete a client and all associated data
  */
-router.delete('/:client_id', (req, res) => {
-    try {
-        const { client_id } = req.params;
-        
-        // Verify client exists before attempting deletion
-        const client = getClientById(client_id);
-        if (!client) {
-            return res.status(404).json({
-                error: 'Client not found'
-            });
-        }
-        
-        const result = deleteClient(client_id);
-        
-        console.log(`[CLIENTS] Deleted: client_id=${client_id}, workouts=${result.workouts_deleted}, metrics=${result.metrics_deleted}, warnings=${result.warnings_deleted}`);
-        
-        res.status(200).json({
-            success: true,
-            client_id: client_id,
-            ...result
-        });
-        
-    } catch (error) {
-        console.error('[CLIENTS] Delete error:', error);
-        
-        if (error.message === 'Client not found') {
-            return res.status(404).json({
-                error: 'Client not found'
-            });
-        }
-        
-        res.status(500).json({
-            error: error.message
+router.delete('/:client_id', asyncHandler(async (req, res) => {
+    const { client_id } = req.params;
+    
+    // Verify client exists before attempting deletion
+    const client = await getClientById(client_id);
+    if (!client) {
+        return res.status(404).json({
+            error: 'Client not found'
         });
     }
-});
+    
+    const result = await deleteClient(client_id);
+    
+    console.log(`[CLIENTS] Deleted: client_id=${client_id}, workouts=${result.workouts_deleted}, metrics=${result.metrics_deleted}, warnings=${result.warnings_deleted}`);
+    
+    res.status(200).json({
+        success: true,
+        client_id: client_id,
+        ...result
+    });
+}));
 
 module.exports = router;
-

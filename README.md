@@ -427,6 +427,37 @@ This project is prepared for iterative development:
 - Additional data types can be added (if needed)
 - Android support can be added (placeholders exist)
 
+## V2 Architecture (Railway + PostgreSQL)
+
+GymDashSync V2 migrates the backend from local SQLite to hosted PostgreSQL on Railway.
+
+### Backend Changes
+
+- **PostgreSQL-Only**: Native `pg.Pool` usage, no SQLite runtime support
+- **Railway Deployment**: Auto-detected Node.js deployment with PostgreSQL service
+- **Native Types**: Uses PostgreSQL IDENTITY columns and TIMESTAMPTZ for timestamps
+- **Async/Await**: All database operations are async with shared error handling
+
+### Deployment
+
+- See `docs/railway-deployment.md` for detailed Railway deployment instructions
+- Backend requires `DATABASE_URL` environment variable (auto-provided by Railway)
+- Health check endpoint: `/health` (verifies database connectivity)
+
+### iOS App V2
+
+- New app target created via duplication in same Xcode project
+- Shares source files with V1 (no code duplication)
+- See `docs/ios-app-v2-setup.md` for target setup instructions
+
+### Non-Goals (V2)
+
+- ❌ No SQLite runtime support
+- ❌ No feature changes
+- ❌ No data migration by default (Railway starts fresh)
+- ❌ No authentication changes
+- ❌ No background sync implementation
+
 ## License
 
 This project uses the Microsoft Health Data Sync library, which is licensed under the MIT License. See the `HealthDataSync/` directory for license details.
