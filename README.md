@@ -1,6 +1,75 @@
 # GymDashSync
 
-A lightweight iOS companion app that reads Apple Health (HealthKit) data and syncs it to a backend API. This is **not** a fitness app or visual dashboard—it's a minimal sync client focused solely on data synchronization.
+A lightweight iOS companion app for the **CoachFit** platform that reads Apple Health (HealthKit) data and syncs it to the CoachFit backend. This is **not** a fitness app or visual dashboard—it's a minimal sync client focused solely on data synchronization between iOS devices and the coaching platform.
+
+## Application Purpose
+
+GymDashSync is the iOS client for **CoachFit**, a coaching platform that helps clients track fitness data and coaches manage their client base. The app's sole responsibility is to:
+
+1. **Collect HealthKit data** - Automatically read steps, sleep, and workout data from Apple Health
+2. **Sync to CoachFit** - Send collected data to the CoachFit backend via secure APIs
+3. **Support manual entries** - Allow coaches to override or correct HealthKit data via the CoachFit web dashboard
+4. **Handle sync failures** - Queue failed syncs locally and retry with exponential backoff when connectivity is restored
+5. **Display sync status** - Show users connection status and last sync time
+
+The app is designed to work **exclusively with the CoachFit platform**—it has no standalone functionality.
+
+## CoachFit Integration (Current Status: In Progress)
+
+### Critical Path Implementation (Jan 15, 2026) ✅ Complete
+
+GymDashSync is currently being migrated from a legacy backend to the **CoachFit API**. The following critical path items have been completed:
+
+**Backend Enhancement (Items 1-3):**
+- ✅ `/api/ingest/steps` endpoint - Receives HealthKit step counts with manual > HealthKit data priority
+- ✅ `/api/ingest/sleep` endpoint - Receives HealthKit sleep data with manual > HealthKit data priority
+- ✅ Entry model dataSources field - Tracks data source (manual vs HealthKit) for transparency
+
+**iOS Implementation (Item 4):**
+- ✅ **SyncQueue** - Core Data-backed persistent queue for failed syncs with exponential backoff retry
+- ✅ **BackgroundSyncTask** - iOS 13+ background processor for automatic retry during idle periods
+- ✅ **Step Collection** - HKStatisticsCollectionQuery for 365-day daily aggregation
+- ✅ **Sleep Collection** - HKSampleQuery for 365-day daily aggregation
+- ✅ **Backend Sync Methods** - syncSteps() and syncSleep() methods in BackendSyncStore
+
+### Data Priority: Manual > HealthKit
+
+A key feature of the CoachFit integration is **data priority control**:
+
+- **Manual entries take precedence** - When a coach manually enters or corrects data via the CoachFit dashboard, that data is preserved
+- **HealthKit as default** - If no manual data exists for a date, HealthKit data is synced automatically
+- **Transparent tracking** - The Entry.dataSources field tracks whether data came from manual entry or HealthKit
+- **Coach control** - Coaches can see and control which data source is active for each client's metrics
+
+**Example:** If a client's Apple Watch incorrectly records 50,000 steps due to a glitch, the coach can manually correct it to 8,000 steps. Future HealthKit syncs won't overwrite that correction.
+
+## CoachFit API Endpoints
+
+GymDashSync communicates with the following CoachFit backend endpoints:
+
+| Endpoint | Method | Purpose | Status |
+|----------|--------|---------|--------|
+| `/api/pair` | POST | Exchange pairing code for client_id | ✅ Complete |
+| `/api/ingest/workouts` | POST | Send workout data | ✅ Complete |
+| `/api/ingest/profile` | POST | Send height/weight metrics | ✅ Complete |
+| `/api/ingest/steps` | POST | Send daily step counts | ✅ Complete (Enhanced) |
+| `/api/ingest/sleep` | POST | Send sleep records with stages | ✅ Complete (Enhanced) |
+
+### Background Sync Mechanism
+
+When network failures occur or the app is backgrounded:
+
+1. **Sync Failure** → Operation added to SyncQueue (Core Data persistence)
+2. **iOS Background Period** → BackgroundSyncTask automatically processes queue when device is idle + connected
+3. **Exponential Backoff** → Retries with increasing delays: 2s, 4s, 8s, 16s, 32s (max 5 retries)
+4. **Auto-Cleanup** → Successful syncs removed from queue; permanent failures marked for manual review
+
+### Remaining Integration Work
+
+**Not yet implemented (for next session):**
+- [ ] Wire SyncQueue into BackendSyncStore error handlers
+- [ ] Register BackgroundSyncTask in AppDelegate lifecycle
+- [ ] E2E testing with network failure scenarios
 
 ## Identity Model: Pairing Codes
 
@@ -45,18 +114,33 @@ GymDashSync is a headless sync client that:
 - Android (Google Fit ingestion) - *not implemented*
 - Shared backend payload schema - *documented but not implemented*
 
-## Data Collection (Locked Scope)
+## Data Collection (Current Scope)
 
-GymDashSync collects **ONLY** the following HealthKit data:
+GymDashSync collects the following HealthKit data **to sync with CoachFit**:
 
 ### Workouts
 - Workout type (running, walking, cycling, strength, HIIT, other)
 - Start time and end time
 - Duration
-- Activity type
 - Active energy burned (calories)
 - Distance (walking/running, cycling)
 - Heart rate (summary only, if available)
+
+### Steps
+- Daily step count aggregations (365-day history)
+- Source devices (iPhone, Apple Watch, etc.)
+
+### Sleep
+- Daily sleep records with stage breakdown:
+  - Total sleep minutes
+  - In bed minutes
+  - Awake minutes
+  - Light sleep (core) minutes
+  - Deep sleep minutes
+  - REM sleep minutes
+  - Sleep start/end timestamps
+- Source devices
+- **Stored in CoachFit as:** Detailed SleepRecord model + daily Entry summary
 
 ### Profile / Body Metrics
 - Height
@@ -66,8 +150,8 @@ GymDashSync collects **ONLY** the following HealthKit data:
 ### Explicitly NOT Collected
 - ❌ VO2 max
 - ❌ HRV (Heart Rate Variability)
-- ❌ Sleep data
 - ❌ Recovery metrics
+- ❌ Medical data
 - ❌ Any write permissions to HealthKit
 
 **Read-only access only.**
@@ -171,70 +255,127 @@ The app maintains an in-memory rolling list of the last 10 errors. Access via:
 
 ## Sync Behavior
 
-Uses incremental sync patterns from the Microsoft Health Data Sync library:
-- **Anchored queries** - Only fetches new or updated records
+GymDashSync syncs data to CoachFit using incremental sync patterns from the Microsoft Health Data Sync library:
+- **Anchored queries** - Only fetches new or updated records from HealthKit
 - **Last-sync tracking** - Maintains state between syncs
-- **Incremental updates** - Only sends changed data
+- **Incremental updates** - Only sends changed data to CoachFit
 
 ### Sync Triggers
-- Manual "Sync now" button
-- App foreground (when app becomes active)
-- Background refresh (where supported by iOS)
+- Manual "Sync now" button in the app
+- Automatic sync when app becomes active (foreground)
+- Background sync via iOS 13+ BGProcessingTask (when device is idle + connected)
+
+### Sync Failure Handling
+- Failed syncs are queued locally via SyncQueue
+- Exponential backoff retry: 2s → 4s → 8s → 16s → 32s (max 5 attempts)
+- Automatic retry during background sync periods
+- Manual retry option via app settings (when fully integrated)
 
 ## Backend Expectations
 
-**Note:** No backend exists yet. The app is designed to work with a configurable endpoint.
+GymDashSync **requires the CoachFit backend** to function. It relies on:
 
-### Configuration
-- Backend URL is configurable (defaults to placeholder)
-- Authentication uses Bearer token (placeholder for now)
-- Endpoints are configurable via `BackendConfig`
+### Authentication
+- **Pairing Code Exchange** - 6-digit pairing codes are exchanged for a client_id (UUID) via `/api/pair`
+- **Bearer Token** - Subsequent API calls use the client_id as authentication
+- **Ownership Model** - All data is tagged with client_id; backend uses this for ownership verification
 
 ### Payload Format
+
+#### Step Data Payload
+```json
+{
+  "client_id": "uuid",
+  "steps": [
+    {
+      "date": "2026-01-15",
+      "total_steps": 12543,
+      "source_devices": ["iPhone 15 Pro", "Apple Watch"]
+    }
+  ]
+}
+```
+
+#### Sleep Data Payload
+```json
+{
+  "client_id": "uuid",
+  "sleep_records": [
+    {
+      "date": "2026-01-15",
+      "total_sleep_minutes": 450,
+      "in_bed_minutes": 480,
+      "awake_minutes": 30,
+      "asleep_core_minutes": 180,
+      "asleep_deep_minutes": 90,
+      "asleep_rem_minutes": 60,
+      "sleep_start": "2026-01-15T23:15:00Z",
+      "sleep_end": "2026-01-16T07:30:00Z",
+      "source_devices": ["Apple Watch"]
+    }
+  ]
+}
+```
 
 #### Workout Payload
 ```json
 {
   "client_id": "uuid",
-  "source": "apple_health",
-  "workout_type": "run | walk | cycle | strength | hiit | other",
-  "start_time": "ISO8601",
-  "end_time": "ISO8601",
-  "duration_seconds": 3600,
-  "calories_active": 500.0,
-  "distance_meters": 5000.0,
-  "avg_heart_rate": 150.0,
-  "source_device": "apple_watch | iphone"
+  "workouts": [
+    {
+      "workout_type": "Running",
+      "start_time": "2026-01-15T10:00:00Z",
+      "end_time": "2026-01-15T10:30:00Z",
+      "duration_seconds": 1800,
+      "calories_active": 200,
+      "distance_meters": 5000,
+      "avg_heart_rate": 150,
+      "source_device": "Apple Watch"
+    }
+  ]
 }
 ```
 
-#### Profile Metric Payload
+#### Profile Metrics Payload
 ```json
 {
   "client_id": "uuid",
-  "metric": "height | weight | body_fat",
-  "value": 175.0,
-  "unit": "cm | kg | percent",
-  "measured_at": "ISO8601",
-  "source": "apple_health"
+  "metrics": [
+    {
+      "metric": "weight",
+      "value": 75.5,
+      "unit": "kg",
+      "measured_at": "2026-01-15T07:00:00Z"
+    }
+  ]
 }
 ```
 
-### Endpoints
-
-**Workouts:**
-- `POST /api/v1/workouts` - Create new workouts
-- `PUT /api/v1/workouts` - Update existing workouts (falls back to POST if not supported)
-- `POST /api/v1/workouts/query` - Query existing workouts by UUID (optional, graceful degradation)
-
-**Profile Metrics:**
-- `POST /api/v1/profile-metrics` - Create new profile metrics
-- `PUT /api/v1/profile-metrics` - Update existing profile metrics (falls back to POST if not supported)
-- `POST /api/v1/profile-metrics/query` - Query existing metrics by UUID (optional, graceful degradation)
-
-**Note:** The query endpoints are optional. If they don't exist or return 404, the sync will gracefully degrade to always creating new records (previous behavior). This allows the app to work with backends that haven't implemented the query endpoints yet.
-
 ## Architecture
+
+### CoachFit Dependency
+
+GymDashSync is **entirely dependent on the CoachFit platform**:
+
+```
+GymDashSync (iOS App)
+    ↓
+    Syncs HealthKit data via HTTPS
+    ↓
+CoachFit Backend (/api/ingest/*)
+    ↓
+    Stores in PostgreSQL database
+    ↓
+CoachFit Web Dashboard
+    ↓
+    Coaches view/override client data
+```
+
+**Without CoachFit:**
+- No pairing mechanism (backend generates codes)
+- No data persistence (no backend to sync to)
+- No way to view or analyze data (no dashboard)
+- App cannot function
 
 ### HealthKit Best Practices (Validated)
 
@@ -331,139 +472,210 @@ This project uses the [Microsoft Health Data Sync](https://github.com/microsoft/
 ### Project Structure
 ```
 GymDashSync/
-├── HealthDataSync/          # Vendored Microsoft Health Data Sync library
-│   ├── Sources/             # Library source files
-│   └── Package.swift        # SPM package definition
-├── GymDashSyncApp/
-│   ├── Sources/
+├── HealthDataSync/              # Vendored Microsoft Health Data Sync library
+│   ├── Sources/                 # Library source files
+│   └── Package.swift            # SPM package definition
+│
+├── GymDashSync/
+│   ├── GymDashSync.swift        # SwiftUI app entry point
+│   ├── SyncManager.swift        # HealthKit data collection orchestration
+│   │                            # - requestStepPermissions() / requestSleepPermissions()
+│   │                            # - collectAndSyncSteps() / collectAndSyncSleep()
+│   │                            # - Integration with syncNow() pipeline
+│   │
+│   ├── BackendSyncStore.swift   # CoachFit API client
+│   │                            # - syncSteps() → POST /api/ingest/steps
+│   │                            # - syncSleep() → POST /api/ingest/sleep
+│   │                            # - syncWorkouts() → POST /api/ingest/workouts
+│   │                            # - syncProfileMetrics() → POST /api/ingest/profile
+│   │
+│   ├── SyncQueue.swift          # Core Data-backed persistent sync queue [NEW]
+│   │                            # - enqueue() / getPendingOperations()
+│   │                            # - markSuccess() / markFailure()
+│   │                            # - getStats() / clearCompleted()
+│   │                            # - Exponential backoff retry logic
+│   │
+│   ├── BackgroundSyncTask.swift # iOS 13+ background sync processor [NEW]
+│   │                            # - registerBackgroundTask()
+│   │                            # - scheduleBackgroundSync()
+│   │                            # - handleBackgroundSync()
+│   │
+│   ├── Models/
 │   │   ├── WorkoutData.swift           # Workout data model
 │   │   ├── ProfileMetricData.swift     # Profile metrics data models
-│   │   ├── BackendSyncStore.swift      # Backend sync implementation
-│   │   ├── SyncManager.swift           # Sync orchestration
+│   │   ├── StepData.swift              # Step aggregation model [NEW]
+│   │   └── SleepData.swift             # Sleep aggregation model [NEW]
+│   │
+│   ├── UI/
 │   │   ├── ContentView.swift           # Main UI
 │   │   ├── SyncViewModel.swift         # UI state management
-│   │   ├── App.swift                   # SwiftUI app entry point
-│   │   └── AppDelegate.swift           # App lifecycle
+│   │   └── ...                         # Other UI components
+│   │
 │   └── Resources/
-│       └── Info.plist                  # App configuration
-├── Package.swift            # Root SPM package (optional)
-├── .gitignore              # Git ignore rules
-├── README.md               # This file
-├── SETUP.md                # Setup instructions
-└── temp_repo/              # Original Microsoft repo (can be removed)
+│       ├── Info.plist                  # App configuration
+│       └── GymDashSyncQueue.xcdatamodel  # Core Data model [NEW]
+│
+├── .gitignore
+├── README.md                    # This file
+├── SETUP.md                     # Setup instructions
+└── docs/
+    ├── COACHFIT_INTEGRATION_PLAN.md
+    └── IMPLEMENTATION_LOG.md
 ```
 
 ## Setup
 
-### Requirements
+### Prerequisites
+- Xcode 14.0 or later
+- iOS 13.0 or later target
+- Swift 5.5 or later
+- Access to CoachFit backend (required to use app)
+
+### Requirements for Development
 - Xcode 12.0 or later
 - iOS 13.0 or later
 - Swift 5.0 or later
 
+### Pairing with CoachFit
+
+To use GymDashSync, you must first obtain a **pairing code** from your coach via the CoachFit web dashboard:
+
+1. Coach logs into CoachFit web app
+2. Coach navigates to `/client-dashboard/pairing` (for clients) or `/coach-dashboard/pairing`
+3. Coach generates a 6-digit pairing code
+4. Coach shares the code with the client
+5. Client enters code into GymDashSync on their iOS device
+6. GymDashSync exchanges code for `client_id` and begins syncing
+
+**Note:** GymDashSync cannot function without a valid pairing code. The code establishes the relationship between the iOS device and the client's CoachFit account.
+
 ### Building
 1. Open the project in Xcode
-2. Configure the backend URL in `BackendConfig` (or via UserDefaults)
-3. Build and run on a device (HealthKit requires a physical device)
+2. Select the `GymDashSync` target
+3. Build and run on a physical iOS device (HealthKit requires a device; simulator support is limited)
 
-### Backend Configuration
-Backend configuration is stored in `UserDefaults`:
-- `GymDashSync.BackendURL` - Backend base URL
-- `GymDashSync.APIKey` - Optional API key for authentication
+### Configuration
+Backend configuration is auto-discovered from CoachFit:
+- Backend URL is set to CoachFit backend endpoint
+- Authentication uses client_id from pairing
+- Endpoints are hardcoded for CoachFit compatibility
 
 ## Implementation Details
 
-### Sync Logic Improvements
+### Sync Logic & HealthKit Integration
 
-The implementation now properly uses the Health Data Sync framework's intended patterns:
+The implementation uses the Health Data Sync framework's intended patterns:
 
-1. **fetchObjects()** - Queries the backend to check which objects already exist by UUID. This allows the framework to:
-   - Call `update()` for existing objects
-   - Call `add()` for new objects
-   - Properly handle HealthKit data changes
+1. **HealthKit Queries** - Anchored queries fetch only new/updated data
+2. **Daily Aggregation** - Raw HealthKit samples are aggregated into daily summaries
+3. **Backend Sync** - Daily summaries are sent to CoachFit via REST API
+4. **Failure Handling** - Failed syncs are queued locally and retried with exponential backoff
+5. **Background Processing** - iOS background tasks automatically retry failed syncs
 
-2. **Update Methods** - Data models implement `update(with:)` to handle changes from HealthKit. The framework automatically:
-   - Fetches existing objects from backend
-   - Compares UUIDs to determine updates vs creates
-   - Calls appropriate methods (update vs add)
+### Step Collection (365-day history)
+- Uses `HKStatisticsCollectionQuery` for efficient daily aggregation
+- Queries 365 days of history on each sync
+- Sends only changed/new daily summaries
+- Syncs to CoachFit via `/api/ingest/steps`
+- On failure: Operation queued with exponential backoff
 
-3. **Graceful Degradation** - If the backend doesn't support query endpoints yet:
-   - `fetchObjects()` returns empty array (all treated as new)
-   - Sync continues to work (previous behavior)
-   - No breaking changes for existing backends
+### Sleep Collection (365-day history)
+- Uses `HKSampleQuery` with manual daily grouping of sleep samples
+- Queries 365 days of history on each sync
+- Aggregates sleep stages (deep, light, REM, core, in_bed, awake)
+- Syncs to CoachFit via `/api/ingest/sleep`
+- Stored in CoachFit as both detailed SleepRecord + daily Entry summary
+- On failure: Operation queued with exponential backoff
 
-4. **HTTP Methods** - Uses proper REST semantics:
-   - `POST` for creating new records
-   - `PUT` for updating existing records
-   - Falls back to POST if PUT not supported (405 error)
+### Data Priority Logic
+
+When syncing to CoachFit, the app respects the **manual > HealthKit** priority:
+
+```
+iOS sends: { client_id, steps: 12000, dataSources: ["healthkit"] }
+       ↓
+CoachFit backend checks:
+  - Does Entry exist for this date with "manual" in dataSources?
+  - If YES: Preserve manual value, add "healthkit" to dataSources
+  - If NO: Store HealthKit value, mark as ["healthkit"] source
+```
+
+This ensures coaches can correct data without it being overwritten by HealthKit on the next sync.
+
+### Graceful Degradation
+
+If CoachFit backend endpoints are temporarily unavailable:
+- Sync failure is captured and queued
+- BackgroundSyncTask will retry up to 5 times with exponential backoff
+- All data is preserved locally until successful transmission
 
 ## Development Notes
 
-### What Was Done
-- ✅ Stripped down Microsoft Health Data Sync to core sync functionality
-- ✅ Implemented workout data collection
-- ✅ Implemented profile metrics collection (height, weight, body fat)
-- ✅ Created minimal UI for sync status
-- ✅ Two-step permission flow
+### What's Implemented
+- ✅ Pairing code exchange with CoachFit backend
+- ✅ HealthKit permission requests (two-step flow)
+- ✅ Workout data collection and sync
+- ✅ Profile metrics collection and sync
+- ✅ **NEW:** Step collection (365-day history, daily aggregation)
+- ✅ **NEW:** Sleep collection (365-day history with sleep stages)
+- ✅ **NEW:** SyncQueue (Core Data, exponential backoff, 5 retries)
+- ✅ **NEW:** BackgroundSyncTask (iOS 13+ BGProcessingTask)
 - ✅ Incremental sync using anchored queries
-- ✅ Configurable backend endpoint
+- ✅ Minimal status UI (connection, sync button, error display)
+- ✅ Two-step permission flow
 - ✅ Read-only HealthKit access
-- ✅ **Proper fetchObjects() implementation** - Queries backend to check existing records
-- ✅ **Update vs Add separation** - Framework properly distinguishes creates from updates
-- ✅ **PUT endpoints for updates** - Uses PUT for updates, POST for creates (with graceful fallback)
-- ✅ **Graceful degradation** - Works even if backend doesn't support query/update endpoints yet
+- ✅ Verbose development mode with error diagnostics
 
-### What Was NOT Done (By Design)
-- ❌ Android implementation
-- ❌ Backend service implementation
+### What's NOT Implemented (By Design)
+- ❌ Android support (iOS only)
+- ❌ Standalone functionality (requires CoachFit backend)
 - ❌ Charts or visualizations
 - ❌ Workout analysis features
+- ❌ Social features
 - ❌ Medical claims or recovery metrics
+- ❌ **Pending:** Integration hooks (SyncQueue wiring, AppDelegate lifecycle)
+- ❌ **Pending:** E2E testing with network failure scenarios
 
 ## Future Iterations
 
-This project is prepared for iterative development:
-- Backend integration can be added when ready
-- UI can be enhanced with branding
-- Additional data types can be added (if needed)
-- Android support can be added (placeholders exist)
+This project is designed for iterative development with the CoachFit platform:
 
-## V2 Architecture (Railway + PostgreSQL)
+### Phase 2: Integration Completion (Pending)
+- [ ] Wire SyncQueue into BackendSyncStore error handlers
+- [ ] Register BackgroundSyncTask in AppDelegate
+- [ ] E2E testing with network failures
+- [ ] Real device testing with background sync
 
-GymDashSync V2 migrates the backend from local SQLite to hosted PostgreSQL on Railway.
+### Phase 3: UI Enhancements (Optional)
+- [ ] Display SyncQueue stats (pending/failed counts)
+- [ ] Manual retry button for failed syncs
+- [ ] Retry timing display
+- [ ] Local notifications for sync completion
 
-### Backend Changes
+### Phase 4: Advanced Features (Deferred)
+- [ ] Configurable sync intervals
+- [ ] Selective data collection (user can disable steps/sleep/workouts)
+- [ ] Data usage analytics
+- [ ] Coach-side data validation UI
 
-- **PostgreSQL-Only**: Native `pg.Pool` usage, no SQLite runtime support
-- **Railway Deployment**: Auto-detected Node.js deployment with PostgreSQL service
-- **Native Types**: Uses PostgreSQL IDENTITY columns and TIMESTAMPTZ for timestamps
-- **Async/Await**: All database operations are async with shared error handling
+## Dependencies
 
-### Deployment
+### Required
+- **CoachFit Backend** - App is entirely dependent on CoachFit for pairing, API endpoints, and data storage
+- **Apple HealthKit** - iOS 13+ required for HealthKit access
+- **Microsoft Health Data Sync** - Vendored library for HealthKit query and incremental sync patterns
 
-- See `docs/railway-deployment.md` for detailed Railway deployment instructions
-- Backend requires `DATABASE_URL` environment variable (auto-provided by Railway)
-- Health check endpoint: `/health` (verifies database connectivity)
+### Optional
+- **None** - App has no external dependencies beyond iOS system frameworks
 
-### iOS App V2
+## Support & Issues
 
-- New app target created via duplication in same Xcode project
-- Shares source files with V1 (no code duplication)
-- See `docs/ios-app-v2-setup.md` for target setup instructions
+GymDashSync is part of the **CoachFit** suite of tools. For issues, features, or questions:
 
-### Non-Goals (V2)
+1. **Integration Issues** - See [GymDashSync GitHub Issue #1](https://github.com/adamswbrown/GymDashSync/issues/1)
+2. **Backend Issues** - See [CoachFit GitHub Issue #3](https://github.com/adamswbrown/CoachFit/issues/3)
+3. **Feature Requests** - Open an issue on the appropriate GitHub repo
 
-- ❌ No SQLite runtime support
-- ❌ No feature changes
-- ❌ No data migration by default (Railway starts fresh)
-- ❌ No authentication changes
-- ❌ No background sync implementation
 
-## License
-
-This project uses the Microsoft Health Data Sync library, which is licensed under the MIT License. See the `HealthDataSync/` directory for license details.
-
-## Contributing
-
-This is a private project. For questions or issues, please contact the project maintainer.
 
 
