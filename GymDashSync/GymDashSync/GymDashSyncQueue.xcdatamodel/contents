@@ -1,0 +1,22 @@
+<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<model type="com.apple.IDECoreDataModeler.DataModel" documentVersion="1.0" lastSavedToolsVersion="22222" systemVersion="14.2" minimumToolsVersion="Automatic" sourceLanguage="Swift" usedWithCloudKit="NO">
+    <entity name="SyncOperationEntity" representedClassName="SyncOperationEntity" syncable="YES" codeGenerationType="class">
+        <attribute name="clientId" attributeType="String" optional="YES"/>
+        <attribute name="completedAt" attributeType="Date" usesScalarValueType="NO" optional="YES"/>
+        <attribute name="createdAt" attributeType="Date" usesScalarValueType="NO" optional="YES"/>
+        <attribute name="endpoint" attributeType="String" optional="YES"/>
+        <attribute name="id" attributeType="String" optional="YES"/>
+        <attribute name="lastError" attributeType="String" optional="YES"/>
+        <attribute name="lastErrorAt" attributeType="Date" usesScalarValueType="NO" optional="YES"/>
+        <attribute name="nextRetryAt" attributeType="Date" usesScalarValueType="NO" optional="YES"/>
+        <attribute name="payload" attributeType="Binary" optional="YES"/>
+        <attribute name="retryCount" attributeType="Integer 32" defaultValueString="0" usesScalarValueType="YES"/>
+        <attribute name="status" attributeType="String" defaultValueString="pending" optional="YES"/>
+        <attribute name="type" attributeType="String" optional="YES"/>
+        <uniqueConstraints>
+            <uniqueConstraint>
+                <constraint value="id"/>
+            </uniqueConstraint>
+        </uniqueConstraints>
+    </entity>
+</model>

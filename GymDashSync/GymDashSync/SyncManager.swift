@@ -425,6 +425,103 @@ public class SyncManager: NSObject, HDSQueryObserverDelegate {
         }
     }
     
+    /// Requests HealthKit permissions for step count data
+    public func requestStepPermissions(completion: @escaping (Bool, Error?) -> Void) {
+        guard HKHealthStore.isHealthDataAvailable() else {
+            let error = ErrorMapper.healthKitError(
+                message: "HealthKit is not available on this device",
+                detail: "HealthKit requires a physical iPhone. It is not available on iPad or iOS Simulator.",
+                healthKitError: "HKHealthStore.isHealthDataAvailable() returned false"
+            )
+            print("[SyncManager] ERROR: HealthKit not available")
+            DispatchQueue.main.async {
+                completion(false, error)
+            }
+            return
+        }
+        
+        print("[SyncManager] Requesting step count permissions...")
+        
+        let store = HKHealthStore()
+        var typesToRead: Set<HKObjectType> = []
+        
+        if let stepCount = HKQuantityType.quantityType(forIdentifier: .stepCount) {
+            typesToRead.insert(stepCount)
+        }
+        
+        print("[SyncManager] Requesting HealthKit authorization for step count...")
+        
+        store.requestAuthorization(toShare: nil, read: typesToRead) { success, error in
+            print("[SyncManager] HealthKit step count authorization result: success=\(success), error=\(error?.localizedDescription ?? "none")")
+            
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) {
+                self.performAuthorizationTestReads { [weak self] isAuthorized in
+                    guard let self = self else { return }
+                    let wasAuthorized = self.isAuthorized
+                    self.isAuthorized = isAuthorized
+                    
+                    if isAuthorized {
+                        print("[SyncManager] SUCCESS: Step count permissions granted")
+                        if wasAuthorized != isAuthorized {
+                            NotificationCenter.default.post(name: NSNotification.Name("HealthKitAuthorizationStatusChanged"), object: nil)
+                            self.onSyncStatusChanged?(false, self.lastSyncDate, nil)
+                        }
+                    }
+                    completion(isAuthorized, error)
+                }
+            }
+        }
+    }
+    
+    /// Requests HealthKit permissions for sleep data
+    public func requestSleepPermissions(completion: @escaping (Bool, Error?) -> Void) {
+        guard HKHealthStore.isHealthDataAvailable() else {
+            let error = ErrorMapper.healthKitError(
+                message: "HealthKit is not available on this device",
+                detail: "HealthKit requires a physical iPhone. It is not available on iPad or iOS Simulator.",
+                healthKitError: "HKHealthStore.isHealthDataAvailable() returned false"
+            )
+            print("[SyncManager] ERROR: HealthKit not available")
+            DispatchQueue.main.async {
+                completion(false, error)
+            }
+            return
+        }
+        
+        print("[SyncManager] Requesting sleep data permissions...")
+        
+        let store = HKHealthStore()
+        var typesToRead: Set<HKObjectType> = []
+        
+        // Sleep analysis is available in iOS 16+
+        if let sleepAnalysis = HKObjectType.categoryType(forIdentifier: .sleepAnalysis) {
+            typesToRead.insert(sleepAnalysis)
+        }
+        
+        print("[SyncManager] Requesting HealthKit authorization for sleep data...")
+        
+        store.requestAuthorization(toShare: nil, read: typesToRead) { success, error in
+            print("[SyncManager] HealthKit sleep authorization result: success=\(success), error=\(error?.localizedDescription ?? "none")")
+            
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) {
+                self.performAuthorizationTestReads { [weak self] isAuthorized in
+                    guard let self = self else { return }
+                    let wasAuthorized = self.isAuthorized
+                    self.isAuthorized = isAuthorized
+                    
+                    if isAuthorized {
+                        print("[SyncManager] SUCCESS: Sleep data permissions granted")
+                        if wasAuthorized != isAuthorized {
+                            NotificationCenter.default.post(name: NSNotification.Name("HealthKitAuthorizationStatusChanged"), object: nil)
+                            self.onSyncStatusChanged?(false, self.lastSyncDate, nil)
+                        }
+                    }
+                    completion(isAuthorized, error)
+                }
+            }
+        }
+    }
+    
     /// Checks HealthKit authorization status
     ///
     /// IMPORTANT: HealthKit has a quirk - `authorizationStatus(for:)` checks SHARING status (read+write),
@@ -951,6 +1048,165 @@ public class SyncManager: NSObject, HDSQueryObserverDelegate {
         hdsManager.stopObserving()
     }
     
+    /// Collects step count data from HealthKit and syncs to backend
+    /// Queries steps from the last 365 days
+    public func collectAndSyncSteps(completion: @escaping (Bool, Error?) -> Void) {
+        guard let clientId = UserDefaults.standard.string(forKey: "GymDashSync.ClientId") else {
+            completion(false, NSError(domain: "SyncManager", code: -1, userInfo: [NSLocalizedDescriptionKey: "Missing client_id"]))
+            return
+        }
+        
+        let store = HKHealthStore()
+        guard let stepType = HKQuantityType.quantityType(forIdentifier: .stepCount) else {
+            completion(false, NSError(domain: "SyncManager", code: -1, userInfo: [NSLocalizedDescriptionKey: "Step count type not available"]))
+            return
+        }
+        
+        // Query last 365 days of step data, aggregated daily
+        let calendar = Calendar.current
+        let endDate = Date()
+        let startDate = calendar.date(byAdding: .day, value: -365, to: endDate) ?? Date(timeIntervalSince1970: 0)
+        let predicate = HKQuery.predicateForSamples(withStart: startDate, end: endDate, options: .strictStartDate)
+        
+        let query = HKStatisticsCollectionQuery(
+            quantityType: stepType,
+            quantitySamplePredicate: predicate,
+            options: .cumulativeSum,
+            period: DateComponents(day: 1),
+            resultsHandler: { [weak self] _, statistics, error in
+                guard let self = self else { return }
+                
+                if let error = error {
+                    print("[SyncManager] Error querying steps: \(error.localizedDescription)")
+                    completion(false, error)
+                    return
+                }
+                
+                guard let statistics = statistics else {
+                    print("[SyncManager] No step statistics available")
+                    completion(true, nil)
+                    return
+                }
+                
+                var stepDataArray: [StepData] = []
+                statistics.enumerateStatistics(from: startDate, to: endDate) { statistic, _ in
+                    guard let sum = statistic.sumQuantity() else { return }
+                    let steps = Int(sum.doubleValue(for: HKUnit.count()))
+                    let stepData = StepData(date: statistic.startDate, totalSteps: steps, sourceDevices: nil, clientId: clientId)
+                    stepDataArray.append(stepData)
+                }
+                
+                print("[SyncManager] Collected \(stepDataArray.count) days of step data")
+                
+                // Sync to backend
+                self.backendStore.syncSteps(stepDataArray) { result in
+                    if result.success {
+                        print("[SyncManager] Step data synced successfully")
+                        completion(true, nil)
+                    } else {
+                        print("[SyncManager] Step data sync failed: \(result.error?.localizedDescription ?? "unknown error")")
+                        completion(false, result.error)
+                    }
+                }
+            }
+        )
+        
+        store.execute(query)
+    }
+    
+    /// Collects sleep data from HealthKit and syncs to backend
+    /// Queries sleep from the last 365 days
+    public func collectAndSyncSleep(completion: @escaping (Bool, Error?) -> Void) {
+        guard let clientId = UserDefaults.standard.string(forKey: "GymDashSync.ClientId") else {
+            completion(false, NSError(domain: "SyncManager", code: -1, userInfo: [NSLocalizedDescriptionKey: "Missing client_id"]))
+            return
+        }
+        
+        let store = HKHealthStore()
+        guard let sleepType = HKObjectType.categoryType(forIdentifier: .sleepAnalysis) else {
+            // Sleep analysis not available on older iOS versions
+            print("[SyncManager] Sleep analysis not available on this device")
+            completion(true, nil)
+            return
+        }
+        
+        // Query last 365 days of sleep data
+        let calendar = Calendar.current
+        let endDate = Date()
+        let startDate = calendar.date(byAdding: .day, value: -365, to: endDate) ?? Date(timeIntervalSince1970: 0)
+        let predicate = HKQuery.predicateForSamples(withStart: startDate, end: endDate, options: .strictStartDate)
+        
+        let query = HKSampleQuery(
+            sampleType: sleepType,
+            predicate: predicate,
+            limit: HKObjectQueryNoLimit,
+            sortDescriptors: [NSSortDescriptor(key: HKSampleSortIdentifierStartDate, ascending: false)],
+            resultsHandler: { [weak self] _, samples, error in
+                guard let self = self else { return }
+                
+                if let error = error {
+                    print("[SyncManager] Error querying sleep: \(error.localizedDescription)")
+                    completion(false, error)
+                    return
+                }
+                
+                guard let samples = samples as? [HKCategorySample] else {
+                    print("[SyncManager] No sleep samples available")
+                    completion(true, nil)
+                    return
+                }
+                
+                // Group sleep by date (aggregate daily)
+                var sleepByDate: [DateComponents: (totalMinutes: Int, samples: [HKCategorySample])] = [:]
+                for sample in samples {
+                    let dateComponents = calendar.dateComponents([.year, .month, .day], from: sample.startDate)
+                    let minutes = Int(sample.endDate.timeIntervalSince(sample.startDate) / 60)
+                    
+                    if sleepByDate[dateComponents] == nil {
+                        sleepByDate[dateComponents] = (0, [])
+                    }
+                    sleepByDate[dateComponents]?.totalMinutes += minutes
+                    sleepByDate[dateComponents]?.samples.append(sample)
+                }
+                
+                let sleepDataArray = sleepByDate.map { dateComponents, data -> SleepData in
+                    guard let date = calendar.date(from: dateComponents) else {
+                        return SleepData(date: Date(), totalSleepMinutes: data.totalMinutes, sourceDevices: nil, clientId: clientId)
+                    }
+                    
+                    // Extract earliest start and latest end from samples that day
+                    let sortedSamples = data.samples.sorted { $0.startDate < $1.startDate }
+                    let sleepStart = sortedSamples.first?.startDate
+                    let sleepEnd = sortedSamples.last?.endDate
+                    
+                    return SleepData(
+                        date: date,
+                        totalSleepMinutes: data.totalMinutes,
+                        sourceDevices: nil,
+                        sleepStart: sleepStart,
+                        sleepEnd: sleepEnd,
+                        clientId: clientId
+                    )
+                }
+                
+                print("[SyncManager] Collected \(sleepDataArray.count) days of sleep data")
+                
+                // Sync to backend
+                self.backendStore.syncSleep(sleepDataArray) { result in
+                    if result.success {
+                        print("[SyncManager] Sleep data synced successfully")
+                        completion(true, nil)
+                    } else {
+                        print("[SyncManager] Sleep data sync failed: \(result.error?.localizedDescription ?? "unknown error")")
+                        completion(false, result.error)
+                    }
+                }
+            }
+        )
+        
+        store.execute(query)
+    }
+    
     public func syncNow(completion: @escaping (Bool, Error?) -> Void) {
         guard !isSyncing else {
             completion(false, NSError(domain: "SyncManager", code: -1, userInfo: [NSLocalizedDescriptionKey: "Sync already in progress"]))
@@ -1051,57 +1307,86 @@ public class SyncManager: NSObject, HDSQueryObserverDelegate {
             
             print("[SyncManager] All observer executions completed: \(completedObservers)/\(observers.count) finished")
             
-            // All observers have completed - combine all results and update once
-            // Restore original callback
-            let savedCallback = self.originalOnSyncComplete
-            self.backendStore.onSyncComplete = self.originalOnSyncComplete
-            self.originalOnSyncComplete = nil
+            // After all observers complete, sync steps and sleep
+            print("[SyncManager] Starting supplemental step and sleep sync...")
+            let stepSleepGroup = DispatchGroup()
             
-            // If no results were accumulated, it means observers found no data
-            // Create a summary result to show that sync ran but found nothing
-            if self.currentSyncResults.isEmpty {
-                print("[SyncManager] No sync results accumulated - observers found no data to sync")
-                let summaryResult = SyncResult(
-                    success: true,
-                    timestamp: Date(),
-                    recordsReceived: 0,
-                    recordsInserted: 0,
-                    duplicatesSkipped: 0,
-                    warningsCount: 0,
-                    errorsCount: 0
-                )
-                self.currentSyncResults = [summaryResult]
+            // Sync steps
+            stepSleepGroup.enter()
+            self.collectAndSyncSteps { success, error in
+                if let error = error {
+                    print("[SyncManager] Step sync failed: \(error.localizedDescription)")
+                    syncErrors.append(error)
+                } else if success {
+                    print("[SyncManager] Step sync completed")
+                }
+                stepSleepGroup.leave()
             }
             
-            // Update backendStore with all combined results
-            self.backendStore.lastSyncResults = self.currentSyncResults
+            // Sync sleep
+            stepSleepGroup.enter()
+            self.collectAndSyncSleep { success, error in
+                if let error = error {
+                    print("[SyncManager] Sleep sync failed: \(error.localizedDescription)")
+                    syncErrors.append(error)
+                } else if success {
+                    print("[SyncManager] Sleep sync completed")
+                }
+                stepSleepGroup.leave()
+            }
             
-            // Call the callback once with all combined results
-            let totalRecords = self.currentSyncResults.reduce(0) { $0 + $1.recordsReceived }
-            print("[SyncManager] Updating diagnostics with \(self.currentSyncResults.count) combined result(s) (total records: \(totalRecords))")
-            
-            // Call the callback after restoring it
-            // This ensures the ViewModel's onSyncComplete callback gets the combined results
-            self.backendStore.onSyncComplete?(self.currentSyncResults)
-            
-                    self.isSyncing = false
-                    self.lastSyncDate = Date()
-            
-            // Report completion
-            if syncErrors.isEmpty {
-                print("[SyncManager] Manual sync completed successfully")
-                    self.onSyncStatusChanged?(false, self.lastSyncDate, nil)
-                    completion(true, nil)
-            } else {
-                let firstError = syncErrors.first!
-                print("[SyncManager] Manual sync completed with \(syncErrors.count) error(s)")
+            stepSleepGroup.notify(queue: .main) {
+                // All observers have completed - combine all results and update once
+                // Restore original callback
+                let savedCallback = self.originalOnSyncComplete
+                self.backendStore.onSyncComplete = self.originalOnSyncComplete
+                self.originalOnSyncComplete = nil
                 
-                // Log detailed error information
-                if let appError = firstError as? AppError {
-                    print("[SyncManager] Error details: category=\(appError.category.rawValue), message=\(appError.message), detail=\(appError.detail ?? "nil")")
+                // If no results were accumulated, it means observers found no data
+                // Create a summary result to show that sync ran but found nothing
+                if self.currentSyncResults.isEmpty {
+                    print("[SyncManager] No sync results accumulated - observers found no data to sync")
+                    let summaryResult = SyncResult(
+                        success: true,
+                        timestamp: Date(),
+                        recordsReceived: 0,
+                        recordsInserted: 0,
+                        duplicatesSkipped: 0,
+                        warningsCount: 0,
+                        errorsCount: 0
+                    )
+                    self.currentSyncResults = [summaryResult]
+                }
+                
+                // Update backendStore with all combined results
+                self.backendStore.lastSyncResults = self.currentSyncResults
+                
+                // Call the callback once with all combined results
+                let totalRecords = self.currentSyncResults.reduce(0) { $0 + $1.recordsReceived }
+                print("[SyncManager] Updating diagnostics with \(self.currentSyncResults.count) combined result(s) (total records: \(totalRecords))")
+                
+                // Call the callback after restoring it
+                // This ensures the ViewModel's onSyncComplete callback gets the combined results
+                self.backendStore.onSyncComplete?(self.currentSyncResults)
+                
+                        self.isSyncing = false
+                        self.lastSyncDate = Date()
+                
+                // Report completion
+                if syncErrors.isEmpty {
+                    print("[SyncManager] Manual sync completed successfully")
+                        self.onSyncStatusChanged?(false, self.lastSyncDate, nil)
+                        completion(true, nil)
                 } else {
-                    print("[SyncManager] Error type: \(type(of: firstError)), description: \(firstError.localizedDescription)")
-                    // Convert to AppError for better error handling
+                    let firstError = syncErrors.first!
+                    print("[SyncManager] Manual sync completed with \(syncErrors.count) error(s)")
+                    
+                    // Log detailed error information
+                    if let appError = firstError as? AppError {
+                        print("[SyncManager] Error details: category=\(appError.category.rawValue), message=\(appError.message), detail=\(appError.detail ?? "nil")")
+                    } else {
+                        print("[SyncManager] Error type: \(type(of: firstError)), description: \(firstError.localizedDescription)")
+                        // Convert to AppError for better error handling
                     let appError = ErrorMapper.unknownError(
                         message: "Sync failed: \(firstError.localizedDescription)",
                         error: firstError

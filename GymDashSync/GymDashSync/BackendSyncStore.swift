@@ -10,28 +10,59 @@ import HealthDataSync
 
 /// Configuration for backend sync endpoint
 public struct BackendConfig {
+    public enum Environment: String {
+        case dev
+        case prod
+        
+        var baseURL: String {
+            switch self {
+            case .dev:
+                return "http://localhost:3000"
+            case .prod:
+                return "https://coach-fit-eight.vercel.app"
+            }
+        }
+    }
+    
+    public let environment: Environment
     public let baseURL: String
     public let apiKey: String?
     public let workoutEndpoint: String
     public let profileMetricEndpoint: String
+    public let stepsEndpoint: String
+    public let sleepEndpoint: String
     public let workoutQueryEndpoint: String
     public let profileMetricQueryEndpoint: String
     
-    public init(baseURL: String, apiKey: String? = nil) {
+    public init(baseURL: String, apiKey: String? = nil, environment: Environment = .prod) {
+        self.environment = environment
         self.baseURL = baseURL
         self.apiKey = apiKey
-        self.workoutEndpoint = "\(baseURL)/api/v1/workouts"
-        self.profileMetricEndpoint = "\(baseURL)/api/v1/profile-metrics"
-        self.workoutQueryEndpoint = "\(baseURL)/api/v1/workouts/query"
-        self.profileMetricQueryEndpoint = "\(baseURL)/api/v1/profile-metrics/query"
+        // CoachFit ingest endpoints
+        self.workoutEndpoint = "\(baseURL)/api/ingest/workouts"
+        self.profileMetricEndpoint = "\(baseURL)/api/ingest/profile"
+        self.stepsEndpoint = "\(baseURL)/api/ingest/steps"
+        self.sleepEndpoint = "\(baseURL)/api/ingest/sleep"
+        // Query endpoints are optional; leave pointed at ingest for graceful 404 handling
+        self.workoutQueryEndpoint = "\(baseURL)/api/ingest/workouts/query"
+        self.profileMetricQueryEndpoint = "\(baseURL)/api/ingest/profile/query"
     }
     
     public static var `default`: BackendConfig {
-        // Default to Railway production URL
-        // Can be overridden via UserDefaults key "GymDashSync.BackendURL"
-        let defaultURL = UserDefaults.standard.string(forKey: "GymDashSync.BackendURL") ?? "https://gymdashsync-production.up.railway.app"
+        // Environment override via UserDefaults key "GymDashSync.Environment" ("dev"|"prod")
+        let storedEnv = UserDefaults.standard.string(forKey: "GymDashSync.Environment")
+        let environment = Environment(rawValue: storedEnv ?? "") ?? {
+            #if DEBUG
+            return .dev
+            #else
+            return .prod
+            #endif
+        }()
+        // URL override still supported for manual testing
+        let overrideURL = UserDefaults.standard.string(forKey: "GymDashSync.BackendURL")
+        let resolvedBase = overrideURL ?? environment.baseURL
         let key = UserDefaults.standard.string(forKey: "GymDashSync.APIKey")
-        return BackendConfig(baseURL: defaultURL, apiKey: key)
+        return BackendConfig(baseURL: resolvedBase, apiKey: key, environment: environment)
     }
     
     /// Extract hostname from baseURL for display purposes
@@ -543,8 +574,50 @@ public class BackendSyncStore: HDSExternalStoreProtocol {
     
     private func syncWorkouts(_ workouts: [WorkoutData], completion: @escaping (SyncResult) -> Void) {
         let startTime = Date()
-        let payloads = workouts.map { $0.toBackendPayload() }
-        
+        guard let firstClientId = workouts.first?.clientId else {
+            completion(SyncResult(
+                success: false,
+                timestamp: Date(),
+                endpoint: config.workoutEndpoint,
+                duration: Date().timeIntervalSince(startTime),
+                recordsReceived: workouts.count,
+                error: ErrorMapper.unknownError(message: "Missing client_id for workouts", error: nil, endpoint: config.workoutEndpoint)
+            ))
+            return
+        }
+        // Ensure all workouts share the same client_id (CoachFit expects one client per payload)
+        guard workouts.allSatisfy({ $0.clientId == firstClientId }) else {
+            completion(SyncResult(
+                success: false,
+                timestamp: Date(),
+                endpoint: config.workoutEndpoint,
+                duration: Date().timeIntervalSince(startTime),
+                recordsReceived: workouts.count,
+                error: ErrorMapper.unknownError(message: "Multiple client_ids in workout batch", error: nil, endpoint: config.workoutEndpoint)
+            ))
+            return
+        }
+        let formatter = ISO8601DateFormatter()
+        let workoutPayloads: [[String: Any]] = workouts.map { workout in
+            return [
+                "workout_type": workout.workoutType,
+                "start_time": formatter.string(from: workout.startTime),
+                "end_time": formatter.string(from: workout.endTime),
+                "duration_seconds": Int(workout.durationSeconds.rounded()),
+                "calories_active": workout.activeEnergyBurned as Any,
+                "distance_meters": workout.distanceMeters as Any,
+                "avg_heart_rate": workout.averageHeartRate as Any,
+                "max_heart_rate": workout.averageHeartRate as Any, // placeholder until max HR collected separately
+                "source_device": workout.sourceDevice as Any,
+                "metadata": ["healthkit_uuid": workout.uuid.uuidString]
+            ].compactMapValues { $0 }
+        }
+
+        let requestBody: [String: Any] = [
+            "client_id": firstClientId,
+            "workouts": workoutPayloads
+        ]
+
         guard let url = URL(string: config.workoutEndpoint) else {
             let error = ErrorMapper.networkError(
                 message: "Invalid server URL",
@@ -571,7 +644,7 @@ public class BackendSyncStore: HDSExternalStoreProtocol {
         }
         
         do {
-            request.httpBody = try JSONSerialization.data(withJSONObject: payloads)
+            request.httpBody = try JSONSerialization.data(withJSONObject: requestBody)
         } catch {
             let appError = ErrorMapper.unknownError(
                 message: "Failed to create request",
@@ -711,8 +784,44 @@ public class BackendSyncStore: HDSExternalStoreProtocol {
     
     private func syncProfileMetrics(_ metrics: [ProfileMetricData], completion: @escaping (SyncResult) -> Void) {
         let startTime = Date()
-        let payloads = metrics.map { $0.toBackendPayload() }
-        
+        guard let firstClientId = metrics.first?.clientId else {
+            completion(SyncResult(
+                success: false,
+                timestamp: Date(),
+                endpoint: config.profileMetricEndpoint,
+                duration: Date().timeIntervalSince(startTime),
+                recordsReceived: metrics.count,
+                error: ErrorMapper.unknownError(message: "Missing client_id for profile metrics", error: nil, endpoint: config.profileMetricEndpoint)
+            ))
+            return
+        }
+        guard metrics.allSatisfy({ $0.clientId == firstClientId }) else {
+            completion(SyncResult(
+                success: false,
+                timestamp: Date(),
+                endpoint: config.profileMetricEndpoint,
+                duration: Date().timeIntervalSince(startTime),
+                recordsReceived: metrics.count,
+                error: ErrorMapper.unknownError(message: "Multiple client_ids in profile metric batch", error: nil, endpoint: config.profileMetricEndpoint)
+            ))
+            return
+        }
+        let formatter = ISO8601DateFormatter()
+        let metricPayloads: [[String: Any]] = metrics.map { metric in
+            [
+                "metric": metric.metric,
+                "value": metric.value,
+                "unit": metric.unit,
+                "measured_at": formatter.string(from: metric.measuredAt),
+                "source": metric.source,
+                "healthkit_uuid": metric.uuid.uuidString
+            ]
+        }
+        let requestBody: [String: Any] = [
+            "client_id": firstClientId,
+            "metrics": metricPayloads
+        ]
+
         guard let url = URL(string: config.profileMetricEndpoint) else {
             let error = ErrorMapper.networkError(
                 message: "Invalid server URL",
@@ -739,7 +848,7 @@ public class BackendSyncStore: HDSExternalStoreProtocol {
         }
         
         do {
-            request.httpBody = try JSONSerialization.data(withJSONObject: payloads)
+            request.httpBody = try JSONSerialization.data(withJSONObject: requestBody)
         } catch {
             let appError = ErrorMapper.unknownError(
                 message: "Failed to create request",
@@ -847,6 +956,7 @@ public class BackendSyncStore: HDSExternalStoreProtocol {
                             validationErrors = errors
                         }
                     }
+
                 } catch {
                     // Ignore parse errors - use defaults
                 }
@@ -865,6 +975,142 @@ public class BackendSyncStore: HDSExternalStoreProtocol {
                 errorsCount: errorsCount,
                 validationErrors: validationErrors.isEmpty ? nil : validationErrors
             ))
+        }.resume()
+    }
+
+    // MARK: - Steps
+    public func syncSteps(_ steps: [StepData], completion: @escaping (SyncResult) -> Void) {
+        let startTime = Date()
+        guard let firstClientId = steps.first?.clientId else {
+            completion(SyncResult(
+                success: false,
+                timestamp: Date(),
+                endpoint: config.stepsEndpoint,
+                duration: Date().timeIntervalSince(startTime),
+                recordsReceived: steps.count,
+                error: ErrorMapper.unknownError(message: "Missing client_id for steps", error: nil, endpoint: config.stepsEndpoint)
+            ))
+            return
+        }
+        guard steps.allSatisfy({ $0.clientId == firstClientId }) else {
+            completion(SyncResult(
+                success: false,
+                timestamp: Date(),
+                endpoint: config.stepsEndpoint,
+                duration: Date().timeIntervalSince(startTime),
+                recordsReceived: steps.count,
+                error: ErrorMapper.unknownError(message: "Multiple client_ids in steps batch", error: nil, endpoint: config.stepsEndpoint)
+            ))
+            return
+        }
+        let isoFormatter = ISO8601DateFormatter()
+        let stepPayloads = steps.map { $0.toBackendPayload(formatter: isoFormatter) }
+        let requestBody: [String: Any] = [
+            "client_id": firstClientId,
+            "steps": stepPayloads
+        ]
+        guard let url = URL(string: config.stepsEndpoint) else {
+            let error = ErrorMapper.networkError(
+                message: "Invalid server URL",
+                endpoint: config.stepsEndpoint,
+                detail: "Failed to create URL from: \(config.stepsEndpoint)"
+            )
+            completion(SyncResult(success: false, timestamp: Date(), endpoint: config.stepsEndpoint, duration: Date().timeIntervalSince(startTime), recordsReceived: steps.count, error: error))
+            return
+        }
+        var request = URLRequest(url: url)
+        request.httpMethod = "POST"
+        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        if let apiKey = config.apiKey {
+            request.setValue("Bearer \(apiKey)", forHTTPHeaderField: "Authorization")
+        }
+        do {
+            request.httpBody = try JSONSerialization.data(withJSONObject: requestBody)
+        } catch {
+            let appError = ErrorMapper.unknownError(message: "Failed to create request", error: error, endpoint: config.stepsEndpoint)
+            completion(SyncResult(success: false, timestamp: Date(), endpoint: config.stepsEndpoint, duration: Date().timeIntervalSince(startTime), recordsReceived: steps.count, error: appError))
+            return
+        }
+        session.dataTask(with: request) { data, response, error in
+            let duration = Date().timeIntervalSince(startTime)
+            let responseBody = data != nil ? String(data: data!, encoding: .utf8) : nil
+            if let error = error {
+                let appError = ErrorMapper.networkError(message: "Connection error: \(error.localizedDescription)", endpoint: self.config.stepsEndpoint, detail: error.localizedDescription, duration: duration)
+                completion(SyncResult(success: false, timestamp: Date(), endpoint: self.config.stepsEndpoint, duration: duration, recordsReceived: steps.count, error: appError))
+                return
+            }
+            guard let httpResponse = response as? HTTPURLResponse else {
+                let appError = ErrorMapper.networkError(message: "Invalid server response", endpoint: self.config.stepsEndpoint, detail: "Response is not HTTPURLResponse", duration: duration)
+                completion(SyncResult(success: false, timestamp: Date(), endpoint: self.config.stepsEndpoint, duration: duration, recordsReceived: steps.count, error: appError))
+                return
+            }
+            let statusCode = httpResponse.statusCode
+            guard statusCode >= 200 && statusCode < 300 else {
+                let appError = ErrorMapper.backendError(message: "Server error", endpoint: self.config.stepsEndpoint, statusCode: statusCode, responseBody: responseBody, detail: "Server returned status code \(statusCode)", duration: duration)
+                completion(SyncResult(success: false, timestamp: Date(), endpoint: self.config.stepsEndpoint, statusCode: statusCode, duration: duration, recordsReceived: steps.count, error: appError))
+                return
+            }
+            completion(SyncResult(success: true, timestamp: Date(), endpoint: self.config.stepsEndpoint, statusCode: statusCode, duration: duration, recordsReceived: steps.count))
+        }.resume()
+    }
+
+    // MARK: - Sleep
+    public func syncSleep(_ sleepRecords: [SleepData], completion: @escaping (SyncResult) -> Void) {
+        let startTime = Date()
+        guard let firstClientId = sleepRecords.first?.clientId else {
+            completion(SyncResult(success: false, timestamp: Date(), endpoint: config.sleepEndpoint, duration: Date().timeIntervalSince(startTime), recordsReceived: sleepRecords.count, error: ErrorMapper.unknownError(message: "Missing client_id for sleep", error: nil, endpoint: config.sleepEndpoint)))
+            return
+        }
+        guard sleepRecords.allSatisfy({ $0.clientId == firstClientId }) else {
+            completion(SyncResult(success: false, timestamp: Date(), endpoint: config.sleepEndpoint, duration: Date().timeIntervalSince(startTime), recordsReceived: sleepRecords.count, error: ErrorMapper.unknownError(message: "Multiple client_ids in sleep batch", error: nil, endpoint: config.sleepEndpoint)))
+            return
+        }
+        let isoFormatter = ISO8601DateFormatter()
+        let dateFormatter = DateFormatter()
+        dateFormatter.dateFormat = "yyyy-MM-dd"
+        let sleepPayloads = sleepRecords.map { $0.toBackendPayload(formatter: isoFormatter, dateOnlyFormatter: dateFormatter) }
+        let requestBody: [String: Any] = [
+            "client_id": firstClientId,
+            "sleep_records": sleepPayloads
+        ]
+        guard let url = URL(string: config.sleepEndpoint) else {
+            let error = ErrorMapper.networkError(message: "Invalid server URL", endpoint: config.sleepEndpoint, detail: "Failed to create URL from: \(config.sleepEndpoint)")
+            completion(SyncResult(success: false, timestamp: Date(), endpoint: config.sleepEndpoint, duration: Date().timeIntervalSince(startTime), recordsReceived: sleepRecords.count, error: error))
+            return
+        }
+        var request = URLRequest(url: url)
+        request.httpMethod = "POST"
+        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        if let apiKey = config.apiKey {
+            request.setValue("Bearer \(apiKey)", forHTTPHeaderField: "Authorization")
+        }
+        do {
+            request.httpBody = try JSONSerialization.data(withJSONObject: requestBody)
+        } catch {
+            let appError = ErrorMapper.unknownError(message: "Failed to create request", error: error, endpoint: config.sleepEndpoint)
+            completion(SyncResult(success: false, timestamp: Date(), endpoint: config.sleepEndpoint, duration: Date().timeIntervalSince(startTime), recordsReceived: sleepRecords.count, error: appError))
+            return
+        }
+        session.dataTask(with: request) { data, response, error in
+            let duration = Date().timeIntervalSince(startTime)
+            let responseBody = data != nil ? String(data: data!, encoding: .utf8) : nil
+            if let error = error {
+                let appError = ErrorMapper.networkError(message: "Connection error: \(error.localizedDescription)", endpoint: self.config.sleepEndpoint, detail: error.localizedDescription, duration: duration)
+                completion(SyncResult(success: false, timestamp: Date(), endpoint: self.config.sleepEndpoint, duration: duration, recordsReceived: sleepRecords.count, error: appError))
+                return
+            }
+            guard let httpResponse = response as? HTTPURLResponse else {
+                let appError = ErrorMapper.networkError(message: "Invalid server response", endpoint: self.config.sleepEndpoint, detail: "Response is not HTTPURLResponse", duration: duration)
+                completion(SyncResult(success: false, timestamp: Date(), endpoint: self.config.sleepEndpoint, duration: duration, recordsReceived: sleepRecords.count, error: appError))
+                return
+            }
+            let statusCode = httpResponse.statusCode
+            guard statusCode >= 200 && statusCode < 300 else {
+                let appError = ErrorMapper.backendError(message: "Server error", endpoint: self.config.sleepEndpoint, statusCode: statusCode, responseBody: responseBody, detail: "Server returned status code \(statusCode)", duration: duration)
+                completion(SyncResult(success: false, timestamp: Date(), endpoint: self.config.sleepEndpoint, statusCode: statusCode, duration: duration, recordsReceived: sleepRecords.count, error: appError))
+                return
+            }
+            completion(SyncResult(success: true, timestamp: Date(), endpoint: self.config.sleepEndpoint, statusCode: statusCode, duration: duration, recordsReceived: sleepRecords.count))
         }.resume()
     }
     

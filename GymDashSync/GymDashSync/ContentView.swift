@@ -108,7 +108,7 @@ struct ContentView: View {
                 HStack {
                     Image(systemName: "server.rack")
                         .foregroundColor(.green)
-                    Text("Connected to Railway backend")
+                    Text("Connected to backend")
                         .font(.subheadline)
                         .fontWeight(.medium)
                 }
