@@ -53,7 +53,7 @@ public struct BackendConfig {
         let storedEnv = UserDefaults.standard.string(forKey: "GymDashSync.Environment")
         let environment = Environment(rawValue: storedEnv ?? "") ?? {
             #if DEBUG
-            return .dev
+            return .prod  // Default to production even in debug mode
             #else
             return .prod
             #endif
@@ -263,18 +263,16 @@ public class BackendSyncStore: HDSExternalStoreProtocol {
             
             // Check if any sync failed
             let failedResults = syncResults.filter { !$0.success }
-            if let firstFailure = failedResults.first, let error = firstFailure.error {
-                print("[BackendSyncStore] Sync failed with error: \(error)")
-                if let appError = error as? AppError {
-                    print("[BackendSyncStore] AppError details: category=\(appError.category.rawValue), message=\(appError.message)")
-                    if let detail = appError.detail {
-                        print("[BackendSyncStore] Error detail: \(detail)")
-                    }
-                    if let context = appError.context {
-                        print("[BackendSyncStore] Error context: endpoint=\(context.endpoint ?? "nil"), statusCode=\(context.statusCode?.description ?? "nil")")
-                    }
+            if let firstFailure = failedResults.first, let appError = firstFailure.error {
+                print("[BackendSyncStore] Sync failed with error: \(appError)")
+                print("[BackendSyncStore] AppError details: category=\(appError.category.rawValue), message=\(appError.message)")
+                if let detail = appError.detail {
+                    print("[BackendSyncStore] Error detail: \(detail)")
                 }
-                completion(error)
+                if let context = appError.context {
+                    print("[BackendSyncStore] Error context: endpoint=\(context.endpoint ?? "nil"), statusCode=\(context.statusCode?.description ?? "nil")")
+                }
+                completion(appError)
             } else {
                 let successCount = syncResults.filter { $0.success }.count
                 print("[BackendSyncStore] All syncs completed successfully (\(successCount)/\(syncResults.count))")
@@ -575,26 +573,30 @@ public class BackendSyncStore: HDSExternalStoreProtocol {
     private func syncWorkouts(_ workouts: [WorkoutData], completion: @escaping (SyncResult) -> Void) {
         let startTime = Date()
         guard let firstClientId = workouts.first?.clientId else {
-            completion(SyncResult(
+            let result = SyncResult(
                 success: false,
                 timestamp: Date(),
                 endpoint: config.workoutEndpoint,
                 duration: Date().timeIntervalSince(startTime),
                 recordsReceived: workouts.count,
                 error: ErrorMapper.unknownError(message: "Missing client_id for workouts", error: nil, endpoint: config.workoutEndpoint)
-            ))
+            )
+            SyncQueue.shared.logFailure(result)
+            completion(result)
             return
         }
         // Ensure all workouts share the same client_id (CoachFit expects one client per payload)
         guard workouts.allSatisfy({ $0.clientId == firstClientId }) else {
-            completion(SyncResult(
+            let result = SyncResult(
                 success: false,
                 timestamp: Date(),
                 endpoint: config.workoutEndpoint,
                 duration: Date().timeIntervalSince(startTime),
                 recordsReceived: workouts.count,
                 error: ErrorMapper.unknownError(message: "Multiple client_ids in workout batch", error: nil, endpoint: config.workoutEndpoint)
-            ))
+            )
+            SyncQueue.shared.logFailure(result)
+            completion(result)
             return
         }
         let formatter = ISO8601DateFormatter()
@@ -624,14 +626,16 @@ public class BackendSyncStore: HDSExternalStoreProtocol {
                 endpoint: config.workoutEndpoint,
                 detail: "Failed to create URL from: \(config.workoutEndpoint)"
             )
-            completion(SyncResult(
+            let result = SyncResult(
                 success: false,
                 timestamp: Date(),
                 endpoint: config.workoutEndpoint,
                 duration: Date().timeIntervalSince(startTime),
                 recordsReceived: workouts.count,
                 error: error
-            ))
+            )
+            SyncQueue.shared.logFailure(result)
+            completion(result)
             return
         }
         
@@ -651,14 +655,16 @@ public class BackendSyncStore: HDSExternalStoreProtocol {
                 error: error,
                 endpoint: config.workoutEndpoint
             )
-            completion(SyncResult(
+            let result = SyncResult(
                 success: false,
                 timestamp: Date(),
                 endpoint: config.workoutEndpoint,
                 duration: Date().timeIntervalSince(startTime),
                 recordsReceived: workouts.count,
                 error: appError
-            ))
+            )
+            SyncQueue.shared.logFailure(result)
+            completion(result)
             return
         }
         
@@ -673,14 +679,16 @@ public class BackendSyncStore: HDSExternalStoreProtocol {
                     detail: error.localizedDescription,
                     duration: duration
                 )
-                completion(SyncResult(
+                let result = SyncResult(
                     success: false,
                     timestamp: Date(),
                     endpoint: self.config.workoutEndpoint,
                     duration: duration,
                     recordsReceived: workouts.count,
                     error: appError
-                ))
+                )
+                SyncQueue.shared.logFailure(result)
+                completion(result)
                 return
             }
             
@@ -691,14 +699,16 @@ public class BackendSyncStore: HDSExternalStoreProtocol {
                     detail: "Response is not HTTPURLResponse",
                     duration: duration
                 )
-                completion(SyncResult(
+                let result = SyncResult(
                     success: false,
                     timestamp: Date(),
                     endpoint: self.config.workoutEndpoint,
                     duration: duration,
                     recordsReceived: workouts.count,
                     error: appError
-                ))
+                )
+                SyncQueue.shared.logFailure(result)
+                completion(result)
                 return
             }
             
@@ -713,7 +723,7 @@ public class BackendSyncStore: HDSExternalStoreProtocol {
                     detail: "Server returned status code \(statusCode)",
                     duration: duration
                 )
-                completion(SyncResult(
+                let result = SyncResult(
                     success: false,
                     timestamp: Date(),
                     endpoint: self.config.workoutEndpoint,
@@ -721,7 +731,9 @@ public class BackendSyncStore: HDSExternalStoreProtocol {
                     duration: duration,
                     recordsReceived: workouts.count,
                     error: appError
-                ))
+                )
+                SyncQueue.shared.logFailure(result)
+                completion(result)
                 return
             }
             
@@ -785,25 +797,29 @@ public class BackendSyncStore: HDSExternalStoreProtocol {
     private func syncProfileMetrics(_ metrics: [ProfileMetricData], completion: @escaping (SyncResult) -> Void) {
         let startTime = Date()
         guard let firstClientId = metrics.first?.clientId else {
-            completion(SyncResult(
+            let result = SyncResult(
                 success: false,
                 timestamp: Date(),
                 endpoint: config.profileMetricEndpoint,
                 duration: Date().timeIntervalSince(startTime),
                 recordsReceived: metrics.count,
                 error: ErrorMapper.unknownError(message: "Missing client_id for profile metrics", error: nil, endpoint: config.profileMetricEndpoint)
-            ))
+            )
+            SyncQueue.shared.logFailure(result)
+            completion(result)
             return
         }
         guard metrics.allSatisfy({ $0.clientId == firstClientId }) else {
-            completion(SyncResult(
+            let result = SyncResult(
                 success: false,
                 timestamp: Date(),
                 endpoint: config.profileMetricEndpoint,
                 duration: Date().timeIntervalSince(startTime),
                 recordsReceived: metrics.count,
                 error: ErrorMapper.unknownError(message: "Multiple client_ids in profile metric batch", error: nil, endpoint: config.profileMetricEndpoint)
-            ))
+            )
+            SyncQueue.shared.logFailure(result)
+            completion(result)
             return
         }
         let formatter = ISO8601DateFormatter()
@@ -828,14 +844,16 @@ public class BackendSyncStore: HDSExternalStoreProtocol {
                 endpoint: config.profileMetricEndpoint,
                 detail: "Failed to create URL from: \(config.profileMetricEndpoint)"
             )
-            completion(SyncResult(
+            let result = SyncResult(
                 success: false,
                 timestamp: Date(),
                 endpoint: config.profileMetricEndpoint,
                 duration: Date().timeIntervalSince(startTime),
                 recordsReceived: metrics.count,
                 error: error
-            ))
+            )
+            SyncQueue.shared.logFailure(result)
+            completion(result)
             return
         }
         
@@ -855,14 +873,16 @@ public class BackendSyncStore: HDSExternalStoreProtocol {
                 error: error,
                 endpoint: config.profileMetricEndpoint
             )
-            completion(SyncResult(
+            let result = SyncResult(
                 success: false,
                 timestamp: Date(),
                 endpoint: config.profileMetricEndpoint,
                 duration: Date().timeIntervalSince(startTime),
                 recordsReceived: metrics.count,
                 error: appError
-            ))
+            )
+            SyncQueue.shared.logFailure(result)
+            completion(result)
             return
         }
         
@@ -877,14 +897,16 @@ public class BackendSyncStore: HDSExternalStoreProtocol {
                     detail: error.localizedDescription,
                     duration: duration
                 )
-                completion(SyncResult(
+                let result = SyncResult(
                     success: false,
                     timestamp: Date(),
                     endpoint: self.config.profileMetricEndpoint,
                     duration: duration,
                     recordsReceived: metrics.count,
                     error: appError
-                ))
+                )
+                SyncQueue.shared.logFailure(result)
+                completion(result)
                 return
             }
             
@@ -895,14 +917,16 @@ public class BackendSyncStore: HDSExternalStoreProtocol {
                     detail: "Response is not HTTPURLResponse",
                     duration: duration
                 )
-                completion(SyncResult(
+                let result = SyncResult(
                     success: false,
                     timestamp: Date(),
                     endpoint: self.config.profileMetricEndpoint,
                     duration: duration,
                     recordsReceived: metrics.count,
                     error: appError
-                ))
+                )
+                SyncQueue.shared.logFailure(result)
+                completion(result)
                 return
             }
             
@@ -917,7 +941,7 @@ public class BackendSyncStore: HDSExternalStoreProtocol {
                     detail: "Server returned status code \(statusCode)",
                     duration: duration
                 )
-                completion(SyncResult(
+                let result = SyncResult(
                     success: false,
                     timestamp: Date(),
                     endpoint: self.config.profileMetricEndpoint,
@@ -925,7 +949,9 @@ public class BackendSyncStore: HDSExternalStoreProtocol {
                     duration: duration,
                     recordsReceived: metrics.count,
                     error: appError
-                ))
+                )
+                SyncQueue.shared.logFailure(result)
+                completion(result)
                 return
             }
             
@@ -982,25 +1008,29 @@ public class BackendSyncStore: HDSExternalStoreProtocol {
     public func syncSteps(_ steps: [StepData], completion: @escaping (SyncResult) -> Void) {
         let startTime = Date()
         guard let firstClientId = steps.first?.clientId else {
-            completion(SyncResult(
+            let result = SyncResult(
                 success: false,
                 timestamp: Date(),
                 endpoint: config.stepsEndpoint,
                 duration: Date().timeIntervalSince(startTime),
                 recordsReceived: steps.count,
                 error: ErrorMapper.unknownError(message: "Missing client_id for steps", error: nil, endpoint: config.stepsEndpoint)
-            ))
+            )
+            SyncQueue.shared.logFailure(result)
+            completion(result)
             return
         }
         guard steps.allSatisfy({ $0.clientId == firstClientId }) else {
-            completion(SyncResult(
+            let result = SyncResult(
                 success: false,
                 timestamp: Date(),
                 endpoint: config.stepsEndpoint,
                 duration: Date().timeIntervalSince(startTime),
                 recordsReceived: steps.count,
                 error: ErrorMapper.unknownError(message: "Multiple client_ids in steps batch", error: nil, endpoint: config.stepsEndpoint)
-            ))
+            )
+            SyncQueue.shared.logFailure(result)
+            completion(result)
             return
         }
         let isoFormatter = ISO8601DateFormatter()
@@ -1015,7 +1045,9 @@ public class BackendSyncStore: HDSExternalStoreProtocol {
                 endpoint: config.stepsEndpoint,
                 detail: "Failed to create URL from: \(config.stepsEndpoint)"
             )
-            completion(SyncResult(success: false, timestamp: Date(), endpoint: config.stepsEndpoint, duration: Date().timeIntervalSince(startTime), recordsReceived: steps.count, error: error))
+            let result = SyncResult(success: false, timestamp: Date(), endpoint: config.stepsEndpoint, duration: Date().timeIntervalSince(startTime), recordsReceived: steps.count, error: error)
+            SyncQueue.shared.logFailure(result)
+            completion(result)
             return
         }
         var request = URLRequest(url: url)
@@ -1028,7 +1060,9 @@ public class BackendSyncStore: HDSExternalStoreProtocol {
             request.httpBody = try JSONSerialization.data(withJSONObject: requestBody)
         } catch {
             let appError = ErrorMapper.unknownError(message: "Failed to create request", error: error, endpoint: config.stepsEndpoint)
-            completion(SyncResult(success: false, timestamp: Date(), endpoint: config.stepsEndpoint, duration: Date().timeIntervalSince(startTime), recordsReceived: steps.count, error: appError))
+            let result = SyncResult(success: false, timestamp: Date(), endpoint: config.stepsEndpoint, duration: Date().timeIntervalSince(startTime), recordsReceived: steps.count, error: appError)
+            SyncQueue.shared.logFailure(result)
+            completion(result)
             return
         }
         session.dataTask(with: request) { data, response, error in
@@ -1036,18 +1070,24 @@ public class BackendSyncStore: HDSExternalStoreProtocol {
             let responseBody = data != nil ? String(data: data!, encoding: .utf8) : nil
             if let error = error {
                 let appError = ErrorMapper.networkError(message: "Connection error: \(error.localizedDescription)", endpoint: self.config.stepsEndpoint, detail: error.localizedDescription, duration: duration)
-                completion(SyncResult(success: false, timestamp: Date(), endpoint: self.config.stepsEndpoint, duration: duration, recordsReceived: steps.count, error: appError))
+                let result = SyncResult(success: false, timestamp: Date(), endpoint: self.config.stepsEndpoint, duration: duration, recordsReceived: steps.count, error: appError)
+                SyncQueue.shared.logFailure(result)
+                completion(result)
                 return
             }
             guard let httpResponse = response as? HTTPURLResponse else {
                 let appError = ErrorMapper.networkError(message: "Invalid server response", endpoint: self.config.stepsEndpoint, detail: "Response is not HTTPURLResponse", duration: duration)
-                completion(SyncResult(success: false, timestamp: Date(), endpoint: self.config.stepsEndpoint, duration: duration, recordsReceived: steps.count, error: appError))
+                let result = SyncResult(success: false, timestamp: Date(), endpoint: self.config.stepsEndpoint, duration: duration, recordsReceived: steps.count, error: appError)
+                SyncQueue.shared.logFailure(result)
+                completion(result)
                 return
             }
             let statusCode = httpResponse.statusCode
             guard statusCode >= 200 && statusCode < 300 else {
                 let appError = ErrorMapper.backendError(message: "Server error", endpoint: self.config.stepsEndpoint, statusCode: statusCode, responseBody: responseBody, detail: "Server returned status code \(statusCode)", duration: duration)
-                completion(SyncResult(success: false, timestamp: Date(), endpoint: self.config.stepsEndpoint, statusCode: statusCode, duration: duration, recordsReceived: steps.count, error: appError))
+                let result = SyncResult(success: false, timestamp: Date(), endpoint: self.config.stepsEndpoint, statusCode: statusCode, duration: duration, recordsReceived: steps.count, error: appError)
+                SyncQueue.shared.logFailure(result)
+                completion(result)
                 return
             }
             completion(SyncResult(success: true, timestamp: Date(), endpoint: self.config.stepsEndpoint, statusCode: statusCode, duration: duration, recordsReceived: steps.count))
@@ -1058,11 +1098,15 @@ public class BackendSyncStore: HDSExternalStoreProtocol {
     public func syncSleep(_ sleepRecords: [SleepData], completion: @escaping (SyncResult) -> Void) {
         let startTime = Date()
         guard let firstClientId = sleepRecords.first?.clientId else {
-            completion(SyncResult(success: false, timestamp: Date(), endpoint: config.sleepEndpoint, duration: Date().timeIntervalSince(startTime), recordsReceived: sleepRecords.count, error: ErrorMapper.unknownError(message: "Missing client_id for sleep", error: nil, endpoint: config.sleepEndpoint)))
+            let result = SyncResult(success: false, timestamp: Date(), endpoint: config.sleepEndpoint, duration: Date().timeIntervalSince(startTime), recordsReceived: sleepRecords.count, error: ErrorMapper.unknownError(message: "Missing client_id for sleep", error: nil, endpoint: config.sleepEndpoint))
+            SyncQueue.shared.logFailure(result)
+            completion(result)
             return
         }
         guard sleepRecords.allSatisfy({ $0.clientId == firstClientId }) else {
-            completion(SyncResult(success: false, timestamp: Date(), endpoint: config.sleepEndpoint, duration: Date().timeIntervalSince(startTime), recordsReceived: sleepRecords.count, error: ErrorMapper.unknownError(message: "Multiple client_ids in sleep batch", error: nil, endpoint: config.sleepEndpoint)))
+            let result = SyncResult(success: false, timestamp: Date(), endpoint: config.sleepEndpoint, duration: Date().timeIntervalSince(startTime), recordsReceived: sleepRecords.count, error: ErrorMapper.unknownError(message: "Multiple client_ids in sleep batch", error: nil, endpoint: config.sleepEndpoint))
+            SyncQueue.shared.logFailure(result)
+            completion(result)
             return
         }
         let isoFormatter = ISO8601DateFormatter()
@@ -1075,7 +1119,9 @@ public class BackendSyncStore: HDSExternalStoreProtocol {
         ]
         guard let url = URL(string: config.sleepEndpoint) else {
             let error = ErrorMapper.networkError(message: "Invalid server URL", endpoint: config.sleepEndpoint, detail: "Failed to create URL from: \(config.sleepEndpoint)")
-            completion(SyncResult(success: false, timestamp: Date(), endpoint: config.sleepEndpoint, duration: Date().timeIntervalSince(startTime), recordsReceived: sleepRecords.count, error: error))
+            let result = SyncResult(success: false, timestamp: Date(), endpoint: config.sleepEndpoint, duration: Date().timeIntervalSince(startTime), recordsReceived: sleepRecords.count, error: error)
+            SyncQueue.shared.logFailure(result)
+            completion(result)
             return
         }
         var request = URLRequest(url: url)
@@ -1088,7 +1134,9 @@ public class BackendSyncStore: HDSExternalStoreProtocol {
             request.httpBody = try JSONSerialization.data(withJSONObject: requestBody)
         } catch {
             let appError = ErrorMapper.unknownError(message: "Failed to create request", error: error, endpoint: config.sleepEndpoint)
-            completion(SyncResult(success: false, timestamp: Date(), endpoint: config.sleepEndpoint, duration: Date().timeIntervalSince(startTime), recordsReceived: sleepRecords.count, error: appError))
+            let result = SyncResult(success: false, timestamp: Date(), endpoint: config.sleepEndpoint, duration: Date().timeIntervalSince(startTime), recordsReceived: sleepRecords.count, error: appError)
+            SyncQueue.shared.logFailure(result)
+            completion(result)
             return
         }
         session.dataTask(with: request) { data, response, error in
@@ -1096,18 +1144,24 @@ public class BackendSyncStore: HDSExternalStoreProtocol {
             let responseBody = data != nil ? String(data: data!, encoding: .utf8) : nil
             if let error = error {
                 let appError = ErrorMapper.networkError(message: "Connection error: \(error.localizedDescription)", endpoint: self.config.sleepEndpoint, detail: error.localizedDescription, duration: duration)
-                completion(SyncResult(success: false, timestamp: Date(), endpoint: self.config.sleepEndpoint, duration: duration, recordsReceived: sleepRecords.count, error: appError))
+                let result = SyncResult(success: false, timestamp: Date(), endpoint: self.config.sleepEndpoint, duration: duration, recordsReceived: sleepRecords.count, error: appError)
+                SyncQueue.shared.logFailure(result)
+                completion(result)
                 return
             }
             guard let httpResponse = response as? HTTPURLResponse else {
                 let appError = ErrorMapper.networkError(message: "Invalid server response", endpoint: self.config.sleepEndpoint, detail: "Response is not HTTPURLResponse", duration: duration)
-                completion(SyncResult(success: false, timestamp: Date(), endpoint: self.config.sleepEndpoint, duration: duration, recordsReceived: sleepRecords.count, error: appError))
+                let result = SyncResult(success: false, timestamp: Date(), endpoint: self.config.sleepEndpoint, duration: duration, recordsReceived: sleepRecords.count, error: appError)
+                SyncQueue.shared.logFailure(result)
+                completion(result)
                 return
             }
             let statusCode = httpResponse.statusCode
             guard statusCode >= 200 && statusCode < 300 else {
                 let appError = ErrorMapper.backendError(message: "Server error", endpoint: self.config.sleepEndpoint, statusCode: statusCode, responseBody: responseBody, detail: "Server returned status code \(statusCode)", duration: duration)
-                completion(SyncResult(success: false, timestamp: Date(), endpoint: self.config.sleepEndpoint, statusCode: statusCode, duration: duration, recordsReceived: sleepRecords.count, error: appError))
+                let result = SyncResult(success: false, timestamp: Date(), endpoint: self.config.sleepEndpoint, statusCode: statusCode, duration: duration, recordsReceived: sleepRecords.count, error: appError)
+                SyncQueue.shared.logFailure(result)
+                completion(result)
                 return
             }
             completion(SyncResult(success: true, timestamp: Date(), endpoint: self.config.sleepEndpoint, statusCode: statusCode, duration: duration, recordsReceived: sleepRecords.count))

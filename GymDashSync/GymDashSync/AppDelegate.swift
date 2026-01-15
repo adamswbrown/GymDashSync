@@ -18,6 +18,9 @@ class AppDelegate: NSObject, UIApplicationDelegate {
         // Initialize sync manager early to handle background HealthKit updates
         syncManager = SyncManager()
         
+        // Register background task - must be called during app initialization
+        BackgroundSyncTask.shared.registerBackgroundTask()
+        
         // Start observing for HealthKit changes
         syncManager?.startObserving()
         

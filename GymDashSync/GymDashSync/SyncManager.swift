@@ -1072,44 +1072,46 @@ public class SyncManager: NSObject, HDSQueryObserverDelegate {
             quantityType: stepType,
             quantitySamplePredicate: predicate,
             options: .cumulativeSum,
-            period: DateComponents(day: 1),
-            resultsHandler: { [weak self] _, statistics, error in
-                guard let self = self else { return }
-                
-                if let error = error {
-                    print("[SyncManager] Error querying steps: \(error.localizedDescription)")
-                    completion(false, error)
-                    return
-                }
-                
-                guard let statistics = statistics else {
-                    print("[SyncManager] No step statistics available")
+            anchorDate: startDate,
+            intervalComponents: DateComponents(day: 1)
+        )
+        
+        query.initialResultsHandler = { [weak self] _, statistics, error in
+            guard let self = self else { return }
+            
+            if let error = error {
+                print("[SyncManager] Error querying steps: \(error.localizedDescription)")
+                completion(false, error)
+                return
+            }
+            
+            guard let statistics = statistics else {
+                print("[SyncManager] No step statistics available")
+                completion(true, nil)
+                return
+            }
+            
+            var stepDataArray: [StepData] = []
+            statistics.enumerateStatistics(from: startDate, to: endDate) { statistic, _ in
+                guard let sum = statistic.sumQuantity() else { return }
+                let steps = Int(sum.doubleValue(for: HKUnit.count()))
+                let stepData = StepData(date: statistic.startDate, totalSteps: steps, sourceDevices: nil, clientId: clientId)
+                stepDataArray.append(stepData)
+            }
+            
+            print("[SyncManager] Collected \(stepDataArray.count) days of step data")
+            
+            // Sync to backend
+            self.backendStore.syncSteps(stepDataArray) { result in
+                if result.success {
+                    print("[SyncManager] Step data synced successfully")
                     completion(true, nil)
-                    return
-                }
-                
-                var stepDataArray: [StepData] = []
-                statistics.enumerateStatistics(from: startDate, to: endDate) { statistic, _ in
-                    guard let sum = statistic.sumQuantity() else { return }
-                    let steps = Int(sum.doubleValue(for: HKUnit.count()))
-                    let stepData = StepData(date: statistic.startDate, totalSteps: steps, sourceDevices: nil, clientId: clientId)
-                    stepDataArray.append(stepData)
-                }
-                
-                print("[SyncManager] Collected \(stepDataArray.count) days of step data")
-                
-                // Sync to backend
-                self.backendStore.syncSteps(stepDataArray) { result in
-                    if result.success {
-                        print("[SyncManager] Step data synced successfully")
-                        completion(true, nil)
-                    } else {
-                        print("[SyncManager] Step data sync failed: \(result.error?.localizedDescription ?? "unknown error")")
-                        completion(false, result.error)
-                    }
+                } else {
+                    print("[SyncManager] Step data sync failed: \(result.error?.localizedDescription ?? "unknown error")")
+                    completion(false, result.error)
                 }
             }
-        )
+        }
         
         store.execute(query)
     }
@@ -1209,7 +1211,14 @@ public class SyncManager: NSObject, HDSQueryObserverDelegate {
     
     public func syncNow(completion: @escaping (Bool, Error?) -> Void) {
         guard !isSyncing else {
-            completion(false, NSError(domain: "SyncManager", code: -1, userInfo: [NSLocalizedDescriptionKey: "Sync already in progress"]))
+            let error = NSError(domain: "SyncManager", code: -1, userInfo: [NSLocalizedDescriptionKey: "Sync already in progress"])
+            let result = SyncResult(
+                success: false,
+                timestamp: Date(),
+                error: ErrorMapper.unknownError(message: "Sync already in progress", error: error)
+            )
+            SyncQueue.shared.logFailure(result)
+            completion(false, error)
             return
         }
         
@@ -1253,8 +1262,16 @@ public class SyncManager: NSObject, HDSQueryObserverDelegate {
             backendStore.onSyncComplete = originalOnSyncComplete
             originalOnSyncComplete = nil
             isSyncing = false
-            onSyncStatusChanged?(false, lastSyncDate, NSError(domain: "SyncManager", code: -2, userInfo: [NSLocalizedDescriptionKey: "No observers configured"]))
-            completion(false, NSError(domain: "SyncManager", code: -2, userInfo: [NSLocalizedDescriptionKey: "No observers configured"]))
+            let error = NSError(domain: "SyncManager", code: -2, userInfo: [NSLocalizedDescriptionKey: "No observers configured"])
+            let appError = ErrorMapper.unknownError(message: "No observers configured", error: error)
+            let result = SyncResult(
+                success: false,
+                timestamp: Date(),
+                error: appError
+            )
+            SyncQueue.shared.logFailure(result)
+            onSyncStatusChanged?(false, lastSyncDate, appError)
+            completion(false, appError)
             return
         }
         
@@ -1338,7 +1355,6 @@ public class SyncManager: NSObject, HDSQueryObserverDelegate {
             stepSleepGroup.notify(queue: .main) {
                 // All observers have completed - combine all results and update once
                 // Restore original callback
-                let savedCallback = self.originalOnSyncComplete
                 self.backendStore.onSyncComplete = self.originalOnSyncComplete
                 self.originalOnSyncComplete = nil
                 
@@ -1369,14 +1385,14 @@ public class SyncManager: NSObject, HDSQueryObserverDelegate {
                 // This ensures the ViewModel's onSyncComplete callback gets the combined results
                 self.backendStore.onSyncComplete?(self.currentSyncResults)
                 
-                        self.isSyncing = false
-                        self.lastSyncDate = Date()
+                self.isSyncing = false
+                self.lastSyncDate = Date()
                 
                 // Report completion
                 if syncErrors.isEmpty {
                     print("[SyncManager] Manual sync completed successfully")
-                        self.onSyncStatusChanged?(false, self.lastSyncDate, nil)
-                        completion(true, nil)
+                    self.onSyncStatusChanged?(false, self.lastSyncDate, nil)
+                    completion(true, nil)
                 } else {
                     let firstError = syncErrors.first!
                     print("[SyncManager] Manual sync completed with \(syncErrors.count) error(s)")
@@ -1386,22 +1402,17 @@ public class SyncManager: NSObject, HDSQueryObserverDelegate {
                         print("[SyncManager] Error details: category=\(appError.category.rawValue), message=\(appError.message), detail=\(appError.detail ?? "nil")")
                     } else {
                         print("[SyncManager] Error type: \(type(of: firstError)), description: \(firstError.localizedDescription)")
-                        // Convert to AppError for better error handling
+                    }
+                    
+                    // Convert to AppError for better error handling
                     let appError = ErrorMapper.unknownError(
                         message: "Sync failed: \(firstError.localizedDescription)",
                         error: firstError
                     )
                     self.onSyncStatusChanged?(false, self.lastSyncDate, appError)
                     completion(false, appError)
-                    return
                 }
-                
-                self.onSyncStatusChanged?(false, self.lastSyncDate, firstError)
-                completion(false, firstError)
-                }
-            
-            // Clear accumulating results for next sync
-            self.currentSyncResults = []
+            }
         }
     }
     

@@ -37,6 +37,15 @@ public class SyncQueue {
     
     // MARK: - Queue Management
     
+    /// Logs a sync failure for monitoring/debugging (doesn't queue a retry - just logs)
+    public func logFailure(_ syncResult: SyncResult) {
+        if let error = syncResult.error {
+            print("[SyncQueue] Sync failed - Endpoint: \(syncResult.endpoint ?? "unknown"), Error: \(error.message)")
+        } else {
+            print("[SyncQueue] Sync failed - Endpoint: \(syncResult.endpoint ?? "unknown")")
+        }
+    }
+    
     /// Adds a sync operation to the queue
     public func enqueue(
         type: SyncOperationType,
@@ -208,22 +217,4 @@ public enum SyncOperationType: String {
 public struct SyncQueueStats {
     public let pendingCount: Int
     public let failedCount: Int
-}
-
-// MARK: - Core Data Entity
-
-@objc(SyncOperationEntity)
-public class SyncOperationEntity: NSManagedObject {
-    @NSManaged public var id: String?
-    @NSManaged public var type: String?
-    @NSManaged public var clientId: String?
-    @NSManaged public var payload: Data?
-    @NSManaged public var endpoint: String?
-    @NSManaged public var status: String? // "pending", "completed", "failed"
-    @NSManaged public var retryCount: Int32
-    @NSManaged public var lastError: String?
-    @NSManaged public var createdAt: Date?
-    @NSManaged public var completedAt: Date?
-    @NSManaged public var lastErrorAt: Date?
-    @NSManaged public var nextRetryAt: Date?
 }

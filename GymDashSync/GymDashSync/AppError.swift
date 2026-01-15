@@ -113,7 +113,7 @@ public struct ErrorContext: Codable, @unchecked Sendable {
 }
 
 extension ErrorContext: Equatable {
-    public static func == (lhs: ErrorContext, rhs: ErrorContext) -> Bool {
+    nonisolated public static func == (lhs: ErrorContext, rhs: ErrorContext) -> Bool {
         return lhs.endpoint == rhs.endpoint &&
                lhs.statusCode == rhs.statusCode &&
                lhs.responseBody == rhs.responseBody &&
@@ -216,13 +216,13 @@ public struct ErrorMapper {
     /// Map unknown error to AppError
     public static func unknownError(
         message: String,
-        error: Error,
+        error: Error? = nil,
         endpoint: String? = nil
     ) -> AppError {
         return AppError(
             category: .unknown,
             message: message,
-            detail: error.localizedDescription,
+            detail: error?.localizedDescription,
             context: ErrorContext(endpoint: endpoint)
         )
     }

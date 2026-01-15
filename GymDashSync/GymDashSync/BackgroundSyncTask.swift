@@ -23,8 +23,8 @@ public class BackgroundSyncTask {
     private let syncQueue = SyncQueue.shared
     private var isProcessing = false
     
-    public init(backendStore: BackendSyncStore = .default) {
-        self.backendStore = backendStore
+    public init(backendStore: BackendSyncStore? = nil) {
+        self.backendStore = backendStore ?? BackendSyncStore()
     }
     
     /// Registers the background sync task (call from app delegate)

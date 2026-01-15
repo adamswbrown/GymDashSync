@@ -171,7 +171,7 @@ class PairingViewModel: ObservableObject {
         request.setValue("application/json", forHTTPHeaderField: "Content-Type")
         request.timeoutInterval = 30
         
-        let payload: [String: Any] = ["pairing_code": pairingCode.trimmingCharacters(in: .whitespacesAndNewlines)]
+        let payload: [String: Any] = ["code": pairingCode.trimmingCharacters(in: .whitespacesAndNewlines)]
         
         do {
             request.httpBody = try JSONSerialization.data(withJSONObject: payload)
