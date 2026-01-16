@@ -151,7 +151,7 @@ class PairingViewModel: ObservableObject {
         lastError = nil
         
         let startTime = Date()
-        let endpoint = "\(backendConfig.baseURL)/pair"
+        let endpoint = "\(backendConfig.baseURL)/api/pair"
         
         // Call pairing API
         guard let url = URL(string: endpoint) else {
