@@ -26,7 +26,7 @@ public class SyncManager: NSObject, HDSQueryObserverDelegate {
     private let lastWorkoutSyncKey = "GymDashSync.LastWorkoutSync"
     private let lastStepsSyncKey = "GymDashSync.LastStepsSync"
     private let lastSleepSyncKey = "GymDashSync.LastSleepSync"
-    private let defaultSyncWindowDays: Int = 365 // If no prior sync, go back this many days
+    private let defaultSyncWindowDays: Int = 30 // If no prior sync, go back this many days
     
     private var hdsManager: HDSManagerProtocol
     let backendStore: BackendSyncStore // Made internal for access to sync results
