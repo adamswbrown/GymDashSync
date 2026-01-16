@@ -257,7 +257,15 @@ public class SyncManager: NSObject, HDSQueryObserverDelegate {
             typesToRead.insert(bodyFat)
         }
         
-        print("[SyncManager] Requesting HealthKit authorization for \(typesToRead.count) types (workouts + profile metrics)...")
+        // Add step and sleep types
+        if let steps = HKQuantityType.quantityType(forIdentifier: .stepCount) {
+            typesToRead.insert(steps)
+        }
+        if let sleep = HKObjectType.categoryType(forIdentifier: .sleepAnalysis) {
+            typesToRead.insert(sleep)
+        }
+        
+        print("[SyncManager] Requesting HealthKit authorization for \(typesToRead.count) types (workouts + profile metrics + steps + sleep)...")
         print("[SyncManager] Types to read: \(typesToRead.map { $0.identifier })")
         
         // Check current authorization status before requesting
