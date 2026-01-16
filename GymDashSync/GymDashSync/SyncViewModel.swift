@@ -82,7 +82,7 @@ class SyncViewModel: ObservableObject {
                     if let endpoint = result.endpoint {
                         if endpoint.contains("workouts") {
                             workoutCount += result.recordsInserted
-                        } else if endpoint.contains("profile-metrics") {
+                        } else if endpoint.contains("profile") {
                             profileMetricCount += result.recordsInserted
                         }
                     }
