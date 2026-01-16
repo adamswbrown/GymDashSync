@@ -358,18 +358,17 @@ struct ContentView: View {
                                 .background(Color(.systemGray6))
                                 .cornerRadius(6)
                         }
-                        }
-                        .padding()
-                        .background(Color(.systemGray6))
-                        .cornerRadius(8)
                     }
+                    .padding()
+                    .background(Color(.systemGray6))
+                    .cornerRadius(8)
+                }
                 } else {
                     Text("No sync results yet")
                         .font(.caption)
                         .foregroundColor(.secondary)
                         .padding()
                 }
-            }
             }
         }
         .padding()
