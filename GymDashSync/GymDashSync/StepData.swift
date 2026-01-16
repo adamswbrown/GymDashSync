@@ -23,8 +23,13 @@ public struct StepData {
     }
     
     public func toBackendPayload(formatter: ISO8601DateFormatter) -> [String: Any] {
+        // Format date as YYYY-MM-DD (date-only format for steps)
+        let dateFormatter = DateFormatter()
+        dateFormatter.dateFormat = "yyyy-MM-dd"
+        dateFormatter.timeZone = TimeZone(secondsFromGMT: 0)
+        
         var payload: [String: Any] = [
-            "date": formatter.string(from: date),
+            "date": dateFormatter.string(from: date),
             "total_steps": totalSteps,
             "healthkit_uuid": uuid.uuidString
         ]
