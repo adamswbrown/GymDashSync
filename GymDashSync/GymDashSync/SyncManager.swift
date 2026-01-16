@@ -1229,6 +1229,13 @@ public class SyncManager: NSObject, HDSQueryObserverDelegate {
             
             print("[SyncManager] Collected \(stepDataArray.count) days of step data")
             
+            // Skip sync if no data collected (normal for incremental syncs with no new data)
+            guard !stepDataArray.isEmpty else {
+                print("[SyncManager] No new step data to sync")
+                completion(true, nil)
+                return
+            }
+            
             // Sync to backend
             self.backendStore.syncSteps(stepDataArray) { result in
                 if result.success {
@@ -1324,6 +1331,13 @@ public class SyncManager: NSObject, HDSQueryObserverDelegate {
                 }
                 
                 print("[SyncManager] Collected \(sleepDataArray.count) days of sleep data")
+                
+                // Skip sync if no data collected (normal for incremental syncs with no new data)
+                guard !sleepDataArray.isEmpty else {
+                    print("[SyncManager] No new sleep data to sync")
+                    completion(true, nil)
+                    return
+                }
                 
                 // Sync to backend
                 self.backendStore.syncSleep(sleepDataArray) { result in
