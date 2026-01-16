@@ -6,7 +6,6 @@
 //  Licensed under the MIT License.
 
 import SwiftUI
-import HealthKit
 
 struct ContentView: View {
     @StateObject private var viewModel = SyncViewModel()
@@ -34,16 +33,6 @@ struct ContentView: View {
                     
                     // Sync Button
                     syncButton
-                    
-                    // Sync Summary Section (only shown after successful sync)
-                    if !viewModel.isSyncing && viewModel.lastSyncDate != nil {
-                        syncSummarySection
-                    }
-                    
-                    // Most Recent Workout Section
-                    if let workout = viewModel.mostRecentWorkoutSynced {
-                        mostRecentWorkoutSection(workout: workout)
-                    }
                     
                     // Permission Buttons
                     if !viewModel.isAuthorized {
@@ -84,42 +73,6 @@ struct ContentView: View {
     
     private var statusSection: some View {
         VStack(spacing: 16) {
-            // HealthKit Availability Warning (dev mode)
-            if DevMode.isEnabled && !HKHealthStore.isHealthDataAvailable() {
-                VStack(alignment: .leading, spacing: 4) {
-                    HStack {
-                        Image(systemName: "exclamationmark.triangle.fill")
-                            .foregroundColor(.orange)
-                        Text("HealthKit Not Available")
-                            .font(.caption)
-                            .fontWeight(.semibold)
-                    }
-                    Text("HealthKit requires a physical iPhone. It is not available on iPad or iOS Simulator.")
-                        .font(.caption2)
-                        .foregroundColor(.secondary)
-                }
-                .padding(8)
-                .background(Color.orange.opacity(0.1))
-                .cornerRadius(6)
-            }
-            
-            // Connection Status Section
-            VStack(alignment: .leading, spacing: 8) {
-                HStack {
-                    Image(systemName: "server.rack")
-                        .foregroundColor(.green)
-                    Text("Connected to backend")
-                        .font(.subheadline)
-                        .fontWeight(.medium)
-                }
-                Text(viewModel.backendHostname)
-                    .font(.caption)
-                    .foregroundColor(.secondary)
-            }
-            .padding(12)
-            .background(Color.green.opacity(0.1))
-            .cornerRadius(8)
-            
             // Authorization Status
             HStack {
                 Image(systemName: viewModel.isAuthorized ? "checkmark.circle.fill" : "xmark.circle.fill")
@@ -130,132 +83,25 @@ struct ContentView: View {
                     .font(.headline)
             }
             
-            // Client ID / Pairing ID
-            if let clientId = UserDefaults.standard.string(forKey: "GymDashSync.ClientId"), !clientId.isEmpty {
-                VStack(spacing: 6) {
-                    HStack {
-                        Image(systemName: "person.circle.fill")
-                            .foregroundColor(.blue)
-                            .font(.title3)
-                        Text("Paired Device")
-                            .font(.subheadline)
-                            .fontWeight(.medium)
-                        Spacer()
-                    }
-                    
-                    HStack {
-                        Text("Client ID:")
-                            .font(.caption)
-                            .foregroundColor(.secondary)
-                        Spacer()
-                        Text(clientId)
-                            .font(.system(.caption, design: .monospaced))
-                            .foregroundColor(.primary)
-                            .padding(.horizontal, 8)
-                            .padding(.vertical, 4)
-                            .background(Color(.systemGray5))
-                            .cornerRadius(4)
-                    }
-                    .padding(.leading, 8)
-                }
-                .padding(12)
-                .background(Color.blue.opacity(0.1))
-                .cornerRadius(8)
-            } else {
-                VStack(alignment: .leading, spacing: 4) {
-                    HStack {
-                        Image(systemName: "exclamationmark.triangle.fill")
-                            .foregroundColor(.orange)
-                        Text("Not Paired")
-                            .font(.subheadline)
-                            .fontWeight(.medium)
-                    }
-                    Text("Device is not paired. Please pair your device to sync data.")
+            // Last Sync
+            if let lastSync = viewModel.lastSyncDate {
+                VStack(spacing: 4) {
+                    Text("Last Sync")
                         .font(.caption)
                         .foregroundColor(.secondary)
-                }
-                .padding(12)
-                .background(Color.orange.opacity(0.1))
-                .cornerRadius(8)
-            }
-            
-            // Permission Denied Warning
-            if !viewModel.isAuthorized && HKHealthStore.isHealthDataAvailable() {
-                VStack(alignment: .leading, spacing: 8) {
-                    HStack {
-                        Image(systemName: "exclamationmark.triangle.fill")
-                            .foregroundColor(.orange)
-                        Text("Permissions Denied")
-                            .font(.caption)
-                            .fontWeight(.semibold)
-                    }
-                    
-                    Text("HealthKit permissions were previously denied. iOS won't show the permission dialog again.")
-                        .font(.caption2)
-                        .foregroundColor(.secondary)
-                    
-                    VStack(alignment: .leading, spacing: 4) {
-                        Text("To reset permissions:")
-                            .font(.caption2)
-                            .fontWeight(.medium)
-                            .foregroundColor(.secondary)
-                        Text("1. Open Settings")
-                            .font(.caption2)
-                            .foregroundColor(.secondary)
-                        Text("2. Go to Privacy & Security → Health")
-                            .font(.caption2)
-                            .foregroundColor(.secondary)
-                        Text("3. Select GymDashSync")
-                            .font(.caption2)
-                            .foregroundColor(.secondary)
-                        Text("4. Enable the data types you want to share")
-                            .font(.caption2)
-                            .foregroundColor(.secondary)
-                    }
-                    .padding(.leading, 8)
-                }
-                .padding(12)
-                .background(Color.orange.opacity(0.1))
-                .cornerRadius(8)
-            }
-            
-            // Sync State Section
-            VStack(spacing: 8) {
-                if viewModel.isSyncing {
-                    HStack {
-                        ProgressView()
-                        Text("Syncing...")
-                            .font(.headline)
-                    }
-                } else if let lastSync = viewModel.lastSyncDate {
-                    VStack(spacing: 4) {
-                        Text("Last synced")
-                            .font(.caption)
-                            .foregroundColor(.secondary)
-                        Text(lastSync, style: .relative)
-                            .font(.subheadline)
-                            .fontWeight(.medium)
-                    }
-                } else {
-                    Text("No sync yet")
+                    Text(lastSync, style: .relative)
                         .font(.subheadline)
-                        .foregroundColor(.secondary)
                 }
+            } else {
+                Text("No sync yet")
+                    .font(.subheadline)
+                    .foregroundColor(.secondary)
             }
             
-            // Refresh Status Button (if not authorized)
-            if !viewModel.isAuthorized && HKHealthStore.isHealthDataAvailable() {
-                Button(action: {
-                    viewModel.checkAuthorizationStatus()
-                }) {
-                    HStack {
-                        Image(systemName: "arrow.clockwise")
-                        Text("Refresh Status")
-                    }
-                    .font(.caption)
-                    .foregroundColor(.blue)
-                }
-                .padding(.top, 4)
+            // Syncing Indicator
+            if viewModel.isSyncing {
+                ProgressView()
+                    .padding()
             }
         }
         .padding()
@@ -380,79 +226,6 @@ struct ContentView: View {
         }
     }
     
-    private var syncSummarySection: some View {
-        VStack(alignment: .leading, spacing: 12) {
-            Text("Sync Summary")
-                .font(.headline)
-            
-            HStack {
-                Text("Workouts synced:")
-                    .foregroundColor(.secondary)
-                Spacer()
-                Text("\(viewModel.workoutsSynced)")
-                    .fontWeight(.semibold)
-            }
-            
-            HStack {
-                Text("Profile metrics synced:")
-                    .foregroundColor(.secondary)
-                Spacer()
-                Text("\(viewModel.profileMetricsSynced)")
-                    .fontWeight(.semibold)
-            }
-        }
-        .padding()
-        .background(Color(.systemGray6))
-        .cornerRadius(8)
-    }
-    
-    private func mostRecentWorkoutSection(workout: WorkoutData) -> some View {
-        VStack(alignment: .leading, spacing: 8) {
-            Text("Most recent workout synced")
-                .font(.caption)
-                .fontWeight(.semibold)
-                .foregroundColor(.secondary)
-            
-            VStack(alignment: .leading, spacing: 4) {
-                HStack {
-                    Text("Type:")
-                        .foregroundColor(.secondary)
-                    Text(workout.workoutType.capitalized)
-                        .fontWeight(.medium)
-                }
-                
-                HStack {
-                    Text("Start time:")
-                        .foregroundColor(.secondary)
-                    Text(workout.startTime, style: .date)
-                        .fontWeight(.medium)
-                    Text(workout.startTime, style: .time)
-                        .fontWeight(.medium)
-                }
-                
-                HStack {
-                    Text("Duration:")
-                        .foregroundColor(.secondary)
-                    Text(formatDuration(workout.durationSeconds))
-                        .fontWeight(.medium)
-                }
-            }
-        }
-        .padding()
-        .background(Color.blue.opacity(0.1))
-        .cornerRadius(8)
-    }
-    
-    private func formatDuration(_ seconds: Double) -> String {
-        let hours = Int(seconds) / 3600
-        let minutes = (Int(seconds) % 3600) / 60
-        if hours > 0 {
-            return "\(hours)h \(minutes)m"
-        } else {
-            return "\(minutes)m"
-        }
-    }
-    
     @ViewBuilder
     private var devDiagnosticsSection: some View {
         VStack(alignment: .leading, spacing: 12) {
@@ -470,7 +243,7 @@ struct ContentView: View {
                 }
             }
             
-            if showDiagnostics {
+                    if showDiagnostics {
                 if !viewModel.lastSyncResults.isEmpty {
                     ForEach(Array(viewModel.lastSyncResults.enumerated()), id: \.offset) { index, result in
                         VStack(alignment: .leading, spacing: 8) {
@@ -483,108 +256,108 @@ struct ContentView: View {
                             
                             Text("Last Sync Summary")
                                 .font(.headline)
-                            
+                        
+                        HStack {
+                            Text("Status:")
+                            Spacer()
+                            Text(result.success ? "Success" : "Failed")
+                                .foregroundColor(result.success ? .green : .red)
+                        }
+                        
+                        if let endpoint = result.endpoint {
                             HStack {
-                                Text("Status:")
+                                Text("Endpoint:")
                                 Spacer()
-                                Text(result.success ? "Success" : "Failed")
-                                    .foregroundColor(result.success ? .green : .red)
-                            }
-                            
-                            if let endpoint = result.endpoint {
-                                HStack {
-                                    Text("Endpoint:")
-                                    Spacer()
-                                    Text(endpoint)
-                                        .font(.caption)
-                                        .foregroundColor(.secondary)
-                                }
-                            }
-                            
-                            if let statusCode = result.statusCode {
-                                HStack {
-                                    Text("Status Code:")
-                                    Spacer()
-                                    Text("\(statusCode)")
-                                        .foregroundColor(.secondary)
-                                }
-                            }
-                            
-                            HStack {
-                                Text("Duration:")
-                                Spacer()
-                                Text(String(format: "%.2fs", result.duration))
+                                Text(endpoint)
+                                    .font(.caption)
                                     .foregroundColor(.secondary)
                             }
-                            
+                        }
+                        
+                        if let statusCode = result.statusCode {
+                            HStack {
+                                Text("Status Code:")
+                                Spacer()
+                                Text("\(statusCode)")
+                                    .foregroundColor(.secondary)
+                            }
+                        }
+                        
+                        HStack {
+                            Text("Duration:")
+                            Spacer()
+                            Text(String(format: "%.2fs", result.duration))
+                                .foregroundColor(.secondary)
+                        }
+                        
+                        Divider()
+                        
+                        Text("Record Counts")
+                            .font(.subheadline)
+                            .fontWeight(.semibold)
+                        
+                        HStack {
+                            Text("Received:")
+                            Spacer()
+                            Text("\(result.recordsReceived)")
+                                .foregroundColor(.secondary)
+                        }
+                        
+                        HStack {
+                            Text("Inserted:")
+                            Spacer()
+                            Text("\(result.recordsInserted)")
+                                .foregroundColor(.green)
+                        }
+                        
+                        if result.duplicatesSkipped > 0 {
+                            HStack {
+                                Text("Duplicates Skipped:")
+                                Spacer()
+                                Text("\(result.duplicatesSkipped)")
+                                    .foregroundColor(.orange)
+                            }
+                        }
+                        
+                        if result.warningsCount > 0 {
+                            HStack {
+                                Text("Warnings:")
+                                Spacer()
+                                Text("\(result.warningsCount)")
+                                    .foregroundColor(.orange)
+                            }
+                        }
+                        
+                        if result.errorsCount > 0 {
+                            HStack {
+                                Text("Errors:")
+                                Spacer()
+                                Text("\(result.errorsCount)")
+                                    .foregroundColor(.red)
+                            }
+                        }
+                        
+                        if let validationErrors = result.validationErrors, !validationErrors.isEmpty {
                             Divider()
-                            
-                            Text("Record Counts")
+                            Text("Validation Errors:")
                                 .font(.subheadline)
                                 .fontWeight(.semibold)
-                            
-                            HStack {
-                                Text("Received:")
-                                Spacer()
-                                Text("\(result.recordsReceived)")
-                                    .foregroundColor(.secondary)
+                            ForEach(validationErrors, id: \.self) { error in
+                                Text("• \(error)")
+                                    .font(.caption)
+                                    .foregroundColor(.red)
                             }
-                            
-                            HStack {
-                                Text("Inserted:")
-                                Spacer()
-                                Text("\(result.recordsInserted)")
-                                    .foregroundColor(.green)
-                            }
-                            
-                            if result.duplicatesSkipped > 0 {
-                                HStack {
-                                    Text("Duplicates Skipped:")
-                                    Spacer()
-                                    Text("\(result.duplicatesSkipped)")
-                                        .foregroundColor(.orange)
-                                }
-                            }
-                            
-                            if result.warningsCount > 0 {
-                                HStack {
-                                    Text("Warnings:")
-                                    Spacer()
-                                    Text("\(result.warningsCount)")
-                                        .foregroundColor(.orange)
-                                }
-                            }
-                            
-                            if result.errorsCount > 0 {
-                                HStack {
-                                    Text("Errors:")
-                                    Spacer()
-                                    Text("\(result.errorsCount)")
-                                        .foregroundColor(.red)
-                                }
-                            }
-                            
-                            if let validationErrors = result.validationErrors, !validationErrors.isEmpty {
-                                Divider()
-                                Text("Validation Errors:")
-                                    .font(.subheadline)
-                                    .fontWeight(.semibold)
-                                ForEach(validationErrors, id: \.self) { error in
-                                    Text("• \(error)")
-                                        .font(.caption)
-                                        .foregroundColor(.red)
-                                }
-                            }
-                            
-                            if DevMode.isEnabled {
-                                Divider()
-                                Text(result.diagnostics)
-                                    .font(.system(.caption, design: .monospaced))
-                                    .foregroundColor(.secondary)
-                                    .padding(8)
-                                    .background(Color(.systemGray6))
-                                    .cornerRadius(6)
-                            }
+                        }
+                        
+                        if DevMode.isEnabled {
+                            Divider()
+                            Text(result.diagnostics)
+                                .font(.system(.caption, design: .monospaced))
+                                .foregroundColor(.secondary)
+                                .padding(8)
+                                .background(Color(.systemGray6))
+                                .cornerRadius(6)
+                        }
                         }
                         .padding()
                         .background(Color(.systemGray6))
@@ -596,6 +369,7 @@ struct ContentView: View {
                         .foregroundColor(.secondary)
                         .padding()
                 }
+            }
             }
         }
         .padding()
@@ -648,38 +422,7 @@ struct DebugView: View {
                     }
                 }
                 
-                Section(header: Text("Permissions")) {
-                    Button(action: {
-                        viewModel.requestWorkoutPermissions()
-                    }) {
-                        Text("Request Workout Permissions")
-                            .foregroundColor(.blue)
-                    }
-                    
-                    Button(action: {
-                        viewModel.requestProfilePermissions()
-                    }) {
-                        Text("Request Profile Permissions")
-                            .foregroundColor(.blue)
-                    }
-                }
-                
                 Section(header: Text("Actions")) {
-                    Button(action: {
-                        viewModel.forceResync()
-                    }) {
-                        HStack {
-                            Text("Force Re-Sync All Data")
-                                .foregroundColor(.blue)
-                            Spacer()
-                            if viewModel.isSyncing {
-                                ProgressView()
-                                    .progressViewStyle(CircularProgressViewStyle())
-                            }
-                        }
-                    }
-                    .disabled(viewModel.isSyncing || !viewModel.isAuthorized)
-                    
                     Button(action: {
                         viewModel.resetAuthorization()
                         presentationMode.wrappedValue.dismiss()
@@ -714,39 +457,12 @@ struct DebugView: View {
                             .font(.caption)
                     }
                     
-                    if let clientId = UserDefaults.standard.string(forKey: "GymDashSync.ClientId"), !clientId.isEmpty {
-                        VStack(alignment: .leading, spacing: 8) {
-                            HStack {
-                                Text("Client ID")
-                                    .fontWeight(.medium)
-                                Spacer()
-                                Button(action: {
-                                    UIPasteboard.general.string = clientId
-                                }) {
-                                    Image(systemName: "doc.on.doc")
-                                        .foregroundColor(.blue)
-                                        .font(.caption)
-                                }
-                            }
-                            
-                            Text(clientId)
-                                .font(.system(.body, design: .monospaced))
-                                .foregroundColor(.primary)
-                                .padding(8)
-                                .frame(maxWidth: .infinity, alignment: .leading)
-                                .background(Color(.systemGray6))
-                                .cornerRadius(6)
-                                .textSelection(.enabled)
-                        }
-                        .padding(.vertical, 4)
-                    } else {
-                        HStack {
-                            Text("Client ID")
-                            Spacer()
-                            Text("Not set")
-                                .foregroundColor(.red)
-                                .font(.subheadline)
-                        }
+                    HStack {
+                        Text("Client ID")
+                        Spacer()
+                        Text(UserDefaults.standard.string(forKey: "GymDashSync.ClientId") ?? "Not set")
+                            .foregroundColor(.secondary)
+                            .font(.caption)
                     }
                 }
             }
