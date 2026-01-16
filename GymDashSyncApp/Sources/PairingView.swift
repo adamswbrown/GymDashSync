@@ -165,7 +165,8 @@ class PairingViewModel: ObservableObject {
         lastError = nil
         
         let startTime = Date()
-        let endpoint = "\(backendConfig.baseURL)/pair"
+        // CoachFit pairing endpoint is under /api/pair
+        let endpoint = "\(backendConfig.baseURL)/api/pair"
         
         // Call pairing API
         guard let url = URL(string: endpoint) else {
