@@ -10,6 +10,37 @@
 import Foundation
 import CoreData
 
+// MARK: - Models (Declared before SyncQueue to avoid forward reference issues)
+
+/// Core Data entity for sync operations
+@objc(SyncOperationRecord)
+public class SyncOperationRecord: NSManagedObject {
+    @NSManaged public var id: String?
+    @NSManaged public var type: String?
+    @NSManaged public var clientId: String?
+    @NSManaged public var payload: Data?
+    @NSManaged public var endpoint: String?
+    @NSManaged public var status: String?
+    @NSManaged public var retryCount: Int16
+    @NSManaged public var createdAt: Date?
+    @NSManaged public var nextRetryAt: Date?
+    @NSManaged public var completedAt: Date?
+    @NSManaged public var lastError: String?
+    @NSManaged public var lastErrorAt: Date?
+}
+
+public enum SyncOperationType: String {
+    case workouts
+    case profile
+    case steps
+    case sleep
+}
+
+public struct SyncQueueStats {
+    public let pendingCount: Int
+    public let failedCount: Int
+}
+
 /// Persistent sync queue backed by Core Data
 ///
 /// Stores failed/pending syncs locally for eventual delivery with exponential backoff.
@@ -203,35 +234,4 @@ public class SyncQueue {
             }
         }
     }
-}
-
-// MARK: - Models
-
-/// Core Data entity for sync operations
-@objc(SyncOperationRecord)
-public class SyncOperationRecord: NSManagedObject {
-    @NSManaged public var id: String?
-    @NSManaged public var type: String?
-    @NSManaged public var clientId: String?
-    @NSManaged public var payload: Data?
-    @NSManaged public var endpoint: String?
-    @NSManaged public var status: String?
-    @NSManaged public var retryCount: Int16
-    @NSManaged public var createdAt: Date?
-    @NSManaged public var nextRetryAt: Date?
-    @NSManaged public var completedAt: Date?
-    @NSManaged public var lastError: String?
-    @NSManaged public var lastErrorAt: Date?
-}
-
-public enum SyncOperationType: String {
-    case workouts
-    case profile
-    case steps
-    case sleep
-}
-
-public struct SyncQueueStats {
-    public let pendingCount: Int
-    public let failedCount: Int
 }

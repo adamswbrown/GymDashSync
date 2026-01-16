@@ -1189,7 +1189,6 @@ public class SyncManager: NSObject, HDSQueryObserverDelegate {
         }
         
         // Query steps from 'since' date onwards (or use incremental window)
-        let calendar = Calendar.current
         let endDate = Date()
         let startDate = since ?? getSyncWindowStart(for: lastStepsSyncKey)
         let predicate = HKQuery.predicateForSamples(withStart: startDate, end: endDate, options: .strictStartDate)
