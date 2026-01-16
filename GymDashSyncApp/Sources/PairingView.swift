@@ -137,10 +137,25 @@ class PairingViewModel: ObservableObject {
     }
     
     func pair() {
-        guard !pairingCode.isEmpty else {
+        let normalizedCode = pairingCode
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+            .uppercased()
+
+        guard !normalizedCode.isEmpty else {
             lastError = ErrorMapper.validationError(
                 message: "Please enter a pairing code",
                 detail: "Pairing code field is empty"
+            )
+            errorHistory.add(lastError!)
+            return
+        }
+
+        // Enforce 6-char alphanumeric format to match CoachFit pairing codes
+        let codeRegex = "^[A-Z0-9]{6}$"
+        if normalizedCode.range(of: codeRegex, options: .regularExpression) == nil {
+            lastError = ErrorMapper.validationError(
+                message: "Codes are 6 letters/numbers",
+                detail: "Pairing code must be 6 alphanumeric characters"
             )
             errorHistory.add(lastError!)
             return
@@ -170,7 +185,7 @@ class PairingViewModel: ObservableObject {
         request.setValue("application/json", forHTTPHeaderField: "Content-Type")
         request.timeoutInterval = 30
         
-        let payload: [String: Any] = ["pairing_code": pairingCode.trimmingCharacters(in: .whitespacesAndNewlines)]
+        let payload: [String: Any] = ["code": normalizedCode]
         
         do {
             request.httpBody = try JSONSerialization.data(withJSONObject: payload)
@@ -231,6 +246,20 @@ class PairingViewModel: ObservableObject {
                     self?.errorHistory.add(appError)
                     return
                 }
+
+                if statusCode == 400 || statusCode == 403 {
+                    let backendMessage = PairingViewModel.parseErrorMessage(data)
+                    let appError = ErrorMapper.pairingError(
+                        message: backendMessage ?? "Pairing code rejected",
+                        endpoint: endpoint,
+                        statusCode: statusCode,
+                        responseBody: responseBody,
+                        duration: duration
+                    )
+                    self?.lastError = appError
+                    self?.errorHistory.add(appError)
+                    return
+                }
                 
                 guard statusCode >= 200 && statusCode < 300,
                       let data = data else {
@@ -280,6 +309,15 @@ class PairingViewModel: ObservableObject {
                 }
             }
         }.resume()
+    }
+
+    private static func parseErrorMessage(_ data: Data?) -> String? {
+        guard let data = data else { return nil }
+        if let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+           let error = json["error"] as? String {
+            return error
+        }
+        return nil
     }
 }
 
