@@ -27,8 +27,8 @@ public struct BackendConfig {
     }
     
     public static var `default`: BackendConfig {
-        // Default to localhost for development - can be overridden via UserDefaults
-        let url = UserDefaults.standard.string(forKey: "GymDashSync.BackendURL") ?? "http://localhost:3001"
+        // Default to Vercel testing instance
+        let url = UserDefaults.standard.string(forKey: "GymDashSync.BackendURL") ?? "https://coach-fit-eight.vercel.app"
         let key = UserDefaults.standard.string(forKey: "GymDashSync.APIKey")
         return BackendConfig(baseURL: url, apiKey: key)
     }
