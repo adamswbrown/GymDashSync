@@ -1,6 +1,6 @@
 <?xml version="1.0" encoding="UTF-8" standalone="yes"?>
 <model type="com.apple.IDECoreDataModeler.DataModel" documentVersion="1.0" lastSavedToolsVersion="22222" systemVersion="14.2" minimumToolsVersion="Automatic" sourceLanguage="Swift" usedWithCloudKit="NO">
-    <entity name="SyncOperationEntity" representedClassName="SyncOperationEntity" syncable="YES" codeGenerationType="class">
+    <entity name="SyncOperationEntity" representedClassName="SyncOperationRecord" syncable="YES" codeGenerationType="class">
         <attribute name="clientId" attributeType="String" optional="YES"/>
         <attribute name="completedAt" attributeType="Date" usesScalarValueType="NO" optional="YES"/>
         <attribute name="createdAt" attributeType="Date" usesScalarValueType="NO" optional="YES"/>

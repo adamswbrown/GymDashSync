@@ -72,7 +72,7 @@ public class BackgroundSyncTask {
         }
         
         // Process queued operations
-        syncQueue.getPendingOperations { [weak self] (operations: [SyncOperationEntity]) in
+        syncQueue.getPendingOperations { [weak self] (operations: [SyncOperationRecord]) in
             guard let self = self else {
                 task.setTaskCompleted(success: false)
                 return
@@ -93,7 +93,7 @@ public class BackgroundSyncTask {
         }
     }
     
-    private func processOperations(_ operations: [SyncOperationEntity], task: BGProcessingTask) {
+    private func processOperations(_ operations: [SyncOperationRecord], task: BGProcessingTask) {
         guard !operations.isEmpty else {
             print("[BackgroundSyncTask] All operations processed")
             isProcessing = false
@@ -122,7 +122,7 @@ public class BackgroundSyncTask {
         }
     }
     
-    private func sendOperation(_ operation: SyncOperationEntity, completion: @escaping (Bool) -> Void) {
+    private func sendOperation(_ operation: SyncOperationRecord, completion: @escaping (Bool) -> Void) {
         guard let endpoint = operation.endpoint,
               let payload = operation.payload else {
             print("[BackgroundSyncTask] Missing endpoint or payload")

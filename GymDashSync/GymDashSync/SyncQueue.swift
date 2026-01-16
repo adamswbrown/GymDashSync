@@ -55,7 +55,7 @@ public class SyncQueue {
     ) {
         let backgroundContext = container.newBackgroundContext()
         backgroundContext.perform {
-            let operation = NSEntityDescription.insertNewObject(forEntityName: "SyncOperation", into: backgroundContext) as! SyncOperationEntity
+            let operation = NSEntityDescription.insertNewObject(forEntityName: "SyncOperationEntity", into: backgroundContext) as! SyncOperationRecord
             
             operation.id = UUID().uuidString
             operation.type = type.rawValue
@@ -77,10 +77,10 @@ public class SyncQueue {
     }
     
     /// Retrieves pending operations ready to retry
-    public func getPendingOperations(completion: @escaping ([SyncOperationEntity]) -> Void) {
+    public func getPendingOperations(completion: @escaping ([SyncOperationRecord]) -> Void) {
         let backgroundContext = container.newBackgroundContext()
         backgroundContext.perform {
-            let fetchRequest = NSFetchRequest<SyncOperationEntity>(entityName: "SyncOperationEntity")
+            let fetchRequest = NSFetchRequest<SyncOperationRecord>(entityName: "SyncOperationEntity")
             fetchRequest.predicate = NSPredicate(format: "status == 'pending' AND nextRetryAt <= %@", Date() as NSDate)
             fetchRequest.sortDescriptors = [NSSortDescriptor(key: "createdAt", ascending: true)]
             
@@ -102,7 +102,7 @@ public class SyncQueue {
     public func markSuccess(operationId: String) {
         let backgroundContext = container.newBackgroundContext()
         backgroundContext.perform {
-            let fetchRequest = NSFetchRequest<SyncOperationEntity>(entityName: "SyncOperationEntity")
+            let fetchRequest = NSFetchRequest<SyncOperationRecord>(entityName: "SyncOperationEntity")
             fetchRequest.predicate = NSPredicate(format: "id == %@", operationId)
             
             do {
@@ -123,7 +123,7 @@ public class SyncQueue {
     public func markFailure(operationId: String, error: String) {
         let backgroundContext = container.newBackgroundContext()
         backgroundContext.perform {
-            let fetchRequest = NSFetchRequest<SyncOperationEntity>(entityName: "SyncOperationEntity")
+            let fetchRequest = NSFetchRequest<SyncOperationRecord>(entityName: "SyncOperationEntity")
             fetchRequest.predicate = NSPredicate(format: "id == %@", operationId)
             
             do {
