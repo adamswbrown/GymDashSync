@@ -18,9 +18,16 @@ import HealthDataSync
 /// - Missing or partial HealthKit data is expected and tolerated
 /// - Replayed data from HealthKit queries is expected (backend deduplicates)
 /// - Permissions are requested AFTER pairing (not before)
+/// - SYNC STRATEGY: Incremental syncs query only data since last successful sync
 ///
 /// This is NOT a demo app - it's a production-ready ingestion client.
 public class SyncManager: NSObject, HDSQueryObserverDelegate {
+    // MARK: - Constants
+    private let lastWorkoutSyncKey = "GymDashSync.LastWorkoutSync"
+    private let lastStepsSyncKey = "GymDashSync.LastStepsSync"
+    private let lastSleepSyncKey = "GymDashSync.LastSleepSync"
+    private let defaultSyncWindowDays: Int = 365 // If no prior sync, go back this many days
+    
     private var hdsManager: HDSManagerProtocol
     let backendStore: BackendSyncStore // Made internal for access to sync results
     private var workoutObserver: HDSQueryObserver?
@@ -1149,6 +1156,16 @@ public class SyncManager: NSObject, HDSQueryObserverDelegate {
     
     // MARK: - Sync Operations
     
+    /// Get the sync window start date for a given data type
+    /// Returns the last recorded sync date if available, otherwise defaults to 365 days ago
+    private func getSyncWindowStart(for key: String) -> Date {
+        if let lastSync = UserDefaults.standard.object(forKey: key) as? Date {
+            return lastSync
+        }
+        // First sync: go back 365 days
+        return Calendar.current.date(byAdding: .day, value: -defaultSyncWindowDays, to: Date()) ?? Date(timeIntervalSince1970: 0)
+    }
+    
     public func startObserving() {
         hdsManager.startObserving()
     }
@@ -1158,8 +1175,8 @@ public class SyncManager: NSObject, HDSQueryObserverDelegate {
     }
     
     /// Collects step count data from HealthKit and syncs to backend
-    /// Queries steps from the last 365 days
-    public func collectAndSyncSteps(completion: @escaping (Bool, Error?) -> Void) {
+    /// - Parameter since: Query steps from this date onwards. If nil, uses last recorded sync date or 365 days ago
+    public func collectAndSyncSteps(since: Date? = nil, completion: @escaping (Bool, Error?) -> Void) {
         guard let clientId = UserDefaults.standard.string(forKey: "GymDashSync.ClientId") else {
             completion(false, NSError(domain: "SyncManager", code: -1, userInfo: [NSLocalizedDescriptionKey: "Missing client_id"]))
             return
@@ -1171,11 +1188,13 @@ public class SyncManager: NSObject, HDSQueryObserverDelegate {
             return
         }
         
-        // Query last 365 days of step data, aggregated daily
+        // Query steps from 'since' date onwards (or use incremental window)
         let calendar = Calendar.current
         let endDate = Date()
-        let startDate = calendar.date(byAdding: .day, value: -365, to: endDate) ?? Date(timeIntervalSince1970: 0)
+        let startDate = since ?? getSyncWindowStart(for: lastStepsSyncKey)
         let predicate = HKQuery.predicateForSamples(withStart: startDate, end: endDate, options: .strictStartDate)
+        
+        print("[SyncManager] Querying steps from \(startDate) to \(endDate)")
         
         let query = HKStatisticsCollectionQuery(
             quantityType: stepType,
@@ -1214,6 +1233,8 @@ public class SyncManager: NSObject, HDSQueryObserverDelegate {
             self.backendStore.syncSteps(stepDataArray) { result in
                 if result.success {
                     print("[SyncManager] Step data synced successfully")
+                    // Update last sync date for steps
+                    UserDefaults.standard.set(Date(), forKey: self.lastStepsSyncKey)
                     completion(true, nil)
                 } else {
                     print("[SyncManager] Step data sync failed: \(result.error?.localizedDescription ?? "unknown error")")
@@ -1226,8 +1247,8 @@ public class SyncManager: NSObject, HDSQueryObserverDelegate {
     }
     
     /// Collects sleep data from HealthKit and syncs to backend
-    /// Queries sleep from the last 365 days
-    public func collectAndSyncSleep(completion: @escaping (Bool, Error?) -> Void) {
+    /// - Parameter since: Query sleep from this date onwards. If nil, uses last recorded sync date or 365 days ago
+    public func collectAndSyncSleep(since: Date? = nil, completion: @escaping (Bool, Error?) -> Void) {
         guard let clientId = UserDefaults.standard.string(forKey: "GymDashSync.ClientId") else {
             completion(false, NSError(domain: "SyncManager", code: -1, userInfo: [NSLocalizedDescriptionKey: "Missing client_id"]))
             return
@@ -1241,11 +1262,13 @@ public class SyncManager: NSObject, HDSQueryObserverDelegate {
             return
         }
         
-        // Query last 365 days of sleep data
+        // Query sleep from 'since' date onwards (or use incremental window)
         let calendar = Calendar.current
         let endDate = Date()
-        let startDate = calendar.date(byAdding: .day, value: -365, to: endDate) ?? Date(timeIntervalSince1970: 0)
+        let startDate = since ?? getSyncWindowStart(for: lastSleepSyncKey)
         let predicate = HKQuery.predicateForSamples(withStart: startDate, end: endDate, options: .strictStartDate)
+        
+        print("[SyncManager] Querying sleep from \(startDate) to \(endDate)")
         
         let query = HKSampleQuery(
             sampleType: sleepType,
@@ -1306,6 +1329,8 @@ public class SyncManager: NSObject, HDSQueryObserverDelegate {
                 self.backendStore.syncSleep(sleepDataArray) { result in
                     if result.success {
                         print("[SyncManager] Sleep data synced successfully")
+                        // Update last sync date for sleep
+                        UserDefaults.standard.set(Date(), forKey: self.lastSleepSyncKey)
                         completion(true, nil)
                     } else {
                         print("[SyncManager] Sleep data sync failed: \(result.error?.localizedDescription ?? "unknown error")")
@@ -1433,13 +1458,17 @@ public class SyncManager: NSObject, HDSQueryObserverDelegate {
             
             print("[SyncManager] All observer executions completed: \(completedObservers)/\(observers.count) finished")
             
-            // After all observers complete, sync steps and sleep
+            // After all observers complete, sync steps and sleep using incremental window
             print("[SyncManager] Starting supplemental step and sleep sync...")
             let stepSleepGroup = DispatchGroup()
             
+            // Get sync windows for supplemental data (respects last sync dates)
+            let stepsSyncStart = self.getSyncWindowStart(for: self.lastStepsSyncKey)
+            let sleepSyncStart = self.getSyncWindowStart(for: self.lastSleepSyncKey)
+            
             // Sync steps
             stepSleepGroup.enter()
-            self.collectAndSyncSteps { success, error in
+            self.collectAndSyncSteps(since: stepsSyncStart) { success, error in
                 if let error = error {
                     print("[SyncManager] Step sync failed: \(error.localizedDescription)")
                     syncErrors.append(error)
@@ -1451,7 +1480,7 @@ public class SyncManager: NSObject, HDSQueryObserverDelegate {
             
             // Sync sleep
             stepSleepGroup.enter()
-            self.collectAndSyncSleep { success, error in
+            self.collectAndSyncSleep(since: sleepSyncStart) { success, error in
                 if let error = error {
                     print("[SyncManager] Sleep sync failed: \(error.localizedDescription)")
                     syncErrors.append(error)
