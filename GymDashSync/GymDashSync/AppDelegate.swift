@@ -24,7 +24,29 @@ class AppDelegate: NSObject, UIApplicationDelegate {
         // Start observing for HealthKit changes
         syncManager?.startObserving()
         
+        // Request HealthKit permissions on first launch (or when user restarts after denying)
+        // This is critical: iOS only registers permissions if the app requests them explicitly
+        // Users enabling in Settings without an app request won't work properly
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) {
+            self.requestInitialHealthKitPermissions()
+        }
+        
         return true
+    }
+    
+    private func requestInitialHealthKitPermissions() {
+        guard let syncManager = syncManager else { return }
+        
+        // Request all permissions in one call
+        syncManager.requestAllPermissions { success, error in
+            if success {
+                print("[AppDelegate] Initial HealthKit permissions request succeeded")
+            } else if let error = error {
+                print("[AppDelegate] Initial HealthKit permissions request failed: \(error.localizedDescription)")
+            } else {
+                print("[AppDelegate] HealthKit permissions request completed (user may have denied)")
+            }
+        }
     }
     
     /// Called when app becomes active (e.g., returning from Settings)

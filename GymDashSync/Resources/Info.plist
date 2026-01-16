@@ -22,6 +22,10 @@
 	<string>1</string>
 	<key>LSRequiresIPhoneOS</key>
 	<true/>
+	<key>NSHealthShareUsageDescription</key>
+	<string>CoachFit needs access to your health data to sync workouts and body metrics to your coach-managed system. Data is read-only and will only be synced to the configured backend.</string>
+	<key>NSHealthUpdateUsageDescription</key>
+	<string>CoachFit does not write to HealthKit. This permission is not used.</string>
 	<key>UIApplicationSceneManifest</key>
 	<dict>
 		<key>UIApplicationSupportsMultipleScenes</key>
@@ -48,10 +52,5 @@
 		<string>UIInterfaceOrientationLandscapeLeft</string>
 		<string>UIInterfaceOrientationLandscapeRight</string>
 	</array>
-	<key>NSHealthShareUsageDescription</key>
-	<string>GymDash Sync needs access to your health data to sync workouts and body metrics to your coach-managed system. Data is read-only and will only be synced to the configured backend.</string>
-	<key>NSHealthUpdateUsageDescription</key>
-	<string>GymDash Sync does not write to HealthKit. This permission is not used.</string>
 </dict>
 </plist>
-

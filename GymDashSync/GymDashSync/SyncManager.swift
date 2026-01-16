@@ -882,15 +882,116 @@ public class SyncManager: NSObject, HDSQueryObserverDelegate {
         if anyAuthorized {
             isAuthorized = true
             print("[SyncManager] Authorization check: At least one type is .sharingAuthorized - authorized")
-        } else {
-            // No types are explicitly authorized, but some might be denied
-            // For mixed state (some .notDetermined, some denied), we're not authorized yet
-            // but we also shouldn't show as denied - keep current state or set to false
+        } else if allDenied {
+            // All denied - we're definitely not authorized
             isAuthorized = false
-            print("[SyncManager] Authorization check: Mixed state - no types explicitly authorized, isAuthorized=false")
+            print("[SyncManager] Authorization check: All types .sharingDenied - need to verify with test reads")
+        } else {
+            // Mixed state: some .notDetermined, some denied
+            // Don't immediately reset to false if we're already authorized from test reads
+            // Test reads are authoritative for read-only permissions
+            // Keep the current state and verify with test reads if needed
+            print("[SyncManager] Authorization check: Mixed state - keeping current state (\(isAuthorized)) and running test reads to verify")
         }
         
         print("[SyncManager] Authorization check: workout=\(workoutStatus.rawValue), height=\(heightStatus.rawValue), weight=\(weightStatus.rawValue), bodyFat=\(bodyFatStatus.rawValue), isAuthorized=\(isAuthorized)")
+        
+        // For mixed state, always run test reads to get authoritative answer
+        if !anyAuthorized && !allDenied {
+            // Mixed state - run test reads
+            if isTestReadInProgress {
+                print("[SyncManager] Authorization check: Test read already in progress, skipping duplicate check")
+                return
+            }
+            
+            print("[SyncManager] Authorization check: Running test reads for mixed state...")
+            isTestReadInProgress = true
+            
+            let dispatchGroup = DispatchGroup()
+            var workoutAuthorized = false
+            var heightAuthorized = false
+            var weightAuthorized = false
+            var bodyFatAuthorized = false
+            
+            // Test workout read
+            dispatchGroup.enter()
+            let workoutTestQuery = HKSampleQuery(
+                sampleType: HKObjectType.workoutType() as HKSampleType,
+                predicate: nil,
+                limit: 1,
+                sortDescriptors: nil
+            ) { query, samples, error in
+                if error == nil {
+                    workoutAuthorized = true
+                    print("[SyncManager] Authorization check: Workout test read SUCCESS")
+                } else {
+                    print("[SyncManager] Authorization check: Workout test read failed: \(error?.localizedDescription ?? "unknown")")
+                }
+                dispatchGroup.leave()
+            }
+            store.execute(workoutTestQuery)
+            
+            // Similar test reads for height, weight, body fat...
+            dispatchGroup.enter()
+            let heightTestQuery = HKSampleQuery(
+                sampleType: HKQuantityType.quantityType(forIdentifier: .height)! as HKSampleType,
+                predicate: nil,
+                limit: 1,
+                sortDescriptors: nil
+            ) { query, samples, error in
+                if error == nil {
+                    heightAuthorized = true
+                }
+                dispatchGroup.leave()
+            }
+            store.execute(heightTestQuery)
+            
+            dispatchGroup.enter()
+            let weightTestQuery = HKSampleQuery(
+                sampleType: HKQuantityType.quantityType(forIdentifier: .bodyMass)! as HKSampleType,
+                predicate: nil,
+                limit: 1,
+                sortDescriptors: nil
+            ) { query, samples, error in
+                if error == nil {
+                    weightAuthorized = true
+                }
+                dispatchGroup.leave()
+            }
+            store.execute(weightTestQuery)
+            
+            dispatchGroup.enter()
+            let bodyFatTestQuery = HKSampleQuery(
+                sampleType: HKQuantityType.quantityType(forIdentifier: .bodyFatPercentage)! as HKSampleType,
+                predicate: nil,
+                limit: 1,
+                sortDescriptors: nil
+            ) { query, samples, error in
+                if error == nil {
+                    bodyFatAuthorized = true
+                }
+                dispatchGroup.leave()
+            }
+            store.execute(bodyFatTestQuery)
+            
+            dispatchGroup.notify(queue: .main) { [weak self] in
+                guard let self = self else { return }
+                self.isTestReadInProgress = false
+                
+                let finalAuthorized = workoutAuthorized || heightAuthorized || weightAuthorized || bodyFatAuthorized
+                let statusChanged = self.isAuthorized != finalAuthorized
+                self.isAuthorized = finalAuthorized
+                
+                print("[SyncManager] Authorization check: Mixed state test reads - authorized=\(finalAuthorized)")
+                
+                if statusChanged {
+                    print("[SyncManager] Authorization status changed: \(wasAuthorized) -> \(finalAuthorized)")
+                    NotificationCenter.default.post(name: NSNotification.Name("HealthKitAuthorizationStatusChanged"), object: nil)
+                    self.onSyncStatusChanged?(false, self.lastSyncDate, nil)
+                }
+            }
+            return
+        }
         
         // Notify observers if status changed
         if wasAuthorized != isAuthorized {
