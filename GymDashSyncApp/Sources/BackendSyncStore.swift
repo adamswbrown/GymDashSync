@@ -20,10 +20,12 @@ public struct BackendConfig {
     public init(baseURL: String, apiKey: String? = nil) {
         self.baseURL = baseURL
         self.apiKey = apiKey
-        self.workoutEndpoint = "\(baseURL)/api/v1/workouts"
-        self.profileMetricEndpoint = "\(baseURL)/api/v1/profile-metrics"
-        self.workoutQueryEndpoint = "\(baseURL)/api/v1/workouts/query"
-        self.profileMetricQueryEndpoint = "\(baseURL)/api/v1/profile-metrics/query"
+        // Use CoachFit ingestion endpoints
+        self.workoutEndpoint = "\(baseURL)/api/ingest/workouts"
+        self.profileMetricEndpoint = "\(baseURL)/api/ingest/profile"
+        // Query endpoints (not yet used but kept for compatibility)
+        self.workoutQueryEndpoint = "\(baseURL)/api/ingest/workouts"
+        self.profileMetricQueryEndpoint = "\(baseURL)/api/ingest/profile"
     }
     
     public static var `default`: BackendConfig {
